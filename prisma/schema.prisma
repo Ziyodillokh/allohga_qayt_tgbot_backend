@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String            @id @default(uuid())
+  email            String?           @unique
+  username         String            @unique
+  password         String?
+  fullName         String
+  avatar           String?
+  bio              String?
+  totalXP          Int               @default(0)
+  level            Int               @default(1)
+  role             Role              @default(USER)
+  isActive         Boolean           @default(true)
+  telegramId       String?           @unique
+  lastActiveAt     DateTime          @default(now())
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  phone            String?
+  telegramPhone    String?
+  telegramUsername String?
+  aiChats          AIChat[]
+  sentMessages     AdminMessage[]    @relation("SentMessages")
+  categoryStats    CategoryStat[]
+  monthlyXP        MonthlyXP[]
+  notifications    Notification[]
+  testAttempts     TestAttempt[]
+  userAchievements UserAchievement[]
+  weeklyXP         WeeklyXP[]
+
+  @@index([email])
+  @@index([username])
+  @@index([totalXP])
+  @@index([telegramId])
+}
+
+model Category {
+  id               String         @id @default(uuid())
+  name             String
+  nameEn           String?
+  nameRu           String?
+  slug             String         @unique
+  description      String?
+  icon             String?
+  color            String         @default("#6366f1")
+  order            Int            @default(0)
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  group            String         @default("other")
+  difficultyLevels String[]       @default(["Oson", "O'rta", "Qiyin"])
+  aiChats          AIChat[]
+  categoryStats    CategoryStat[]
+  questions        Question[]
+  testAttempts     TestAttempt[]
+
+  @@index([slug])
+  @@index([isActive])
+  @@index([group])
+}
+
+model Question {
+  id            String       @id @default(uuid())
+  categoryId    String
+  question      String
+  options       String[]
+  correctAnswer Int
+  explanation   String?
+  difficulty    Difficulty   @default(MEDIUM)
+  xpReward      Int          @default(10)
+  tags          String[]
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  levelIndex    Int          @default(0)
+  category      Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  testAnswers   TestAnswer[]
+
+  @@index([categoryId])
+  @@index([difficulty])
+  @@index([levelIndex])
+  @@index([isActive])
+}
+
+model TestAttempt {
+  id             String       @id @default(uuid())
+  userId         String?
+  categoryId     String?
+  score          Int          @default(0)
+  totalQuestions Int          @default(10)
+  correctAnswers Int          @default(0)
+  xpEarned       Int          @default(0)
+  timeSpent      Int?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  testAnswers    TestAnswer[]
+  category       Category?    @relation(fields: [categoryId], references: [id])
+  user           User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([categoryId])
+  @@index([createdAt])
+}
+
+model TestAnswer {
+  id             String      @id @default(uuid())
+  testAttemptId  String
+  questionId     String
+  selectedAnswer Int
+  isCorrect      Boolean
+  timeSpent      Int?
+  question       Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  testAttempt    TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
+
+  @@index([testAttemptId])
+  @@index([questionId])
+}
+
+model CategoryStat {
+  id             String   @id @default(uuid())
+  userId         String
+  categoryId     String
+  totalTests     Int      @default(0)
+  totalQuestions Int      @default(0)
+  correctAnswers Int      @default(0)
+  totalXP        Int      @default(0)
+  averageScore   Float    @default(0)
+  bestScore      Int      @default(0)
+  updatedAt      DateTime @updatedAt
+  category       Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@index([userId])
+  @@index([categoryId])
+  @@index([totalXP])
+}
+
+model AIChat {
+  id         String    @id @default(uuid())
+  userId     String
+  categoryId String?
+  message    String
+  response   String
+  tokens     Int?
+  createdAt  DateTime  @default(now())
+  category   Category? @relation(fields: [categoryId], references: [id])
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Achievement {
+  id               String            @id @default(uuid())
+  name             String
+  nameEn           String?
+  nameRu           String?
+  description      String
+  icon             String
+  condition        Json
+  xpReward         Int               @default(0)
+  order            Int               @default(0)
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  userAchievements UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid())
+  userId        String
+  achievementId String
+  progress      Int         @default(0)
+  unlockedAt    DateTime?
+  createdAt     DateTime    @default(now())
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(SYSTEM)
+  isRead    Boolean          @default(false)
+  data      Json?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model AdminMessage {
+  id           String    @id @default(uuid())
+  adminId      String
+  title        String
+  message      String
+  targetType   String
+  targetIds    String[]
+  scheduledAt  DateTime?
+  sentAt       DateTime?
+  readCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  channels     String[]
+  emailSent    Int       @default(0)
+  imageUrl     String?
+  notifSent    Int       @default(0)
+  telegramSent Int       @default(0)
+  videoUrl     String?
+  admin        User      @relation("SentMessages", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([sentAt])
+}
+
+model WeeklyXP {
+  id        String   @id @default(uuid())
+  userId    String
+  xp        Int      @default(0)
+  weekStart DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
+  @@index([weekStart])
+  @@index([xp])
+}
+
+model MonthlyXP {
+  id         String   @id @default(uuid())
+  userId     String
+  xp         Int      @default(0)
+  monthStart DateTime
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, monthStart])
+  @@index([monthStart])
+  @@index([xp])
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model DesignSetting {
+  id            String   @id @default(uuid())
+  theme         String   @default("default")
+  lightVideoUrl String?
+  darkVideoUrl  String?
+  lightImageUrl String?
+  darkImageUrl  String?
+  videoLoop     Boolean  @default(true)
+  videoMuted    Boolean  @default(true)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  code      String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([code])
+  @@index([expiresAt])
+}
+
+enum Role {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum NotificationType {
+  SYSTEM
+  ACHIEVEMENT
+  LEVEL_UP
+  RANKING
+  MESSAGE
+}
