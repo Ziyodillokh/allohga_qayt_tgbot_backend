@@ -19,8 +19,8 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            cd /root/backend/Bilimdon_ai/backend
+            cd /root/backend/allohga_qayt_tgbot_backend
             git pull origin main
             npm install --force
             npm run build
-            pm2 restart bilimdon-backend
+            pm2 restart allohgaqayt-backend

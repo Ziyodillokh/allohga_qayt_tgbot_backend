@@ -12,7 +12,7 @@ CREATE TABLE "User" (
     "id" TEXT NOT NULL,
     "email" TEXT,
     "username" TEXT NOT NULL,
-    "password" TEXT,
+    "password" TEXT,`
     "fullName" TEXT NOT NULL,
     "avatar" TEXT,
     "bio" TEXT,
