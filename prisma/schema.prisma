@@ -39,6 +39,7 @@ model User {
   @@index([username])
   @@index([totalXP])
   @@index([telegramId])
+  @@map("users") // Postgres reserved so‘z “user” uchun
 }
 
 model Category {
