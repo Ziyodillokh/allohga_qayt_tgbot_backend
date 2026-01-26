@@ -125,7 +125,7 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
             Zikr,
             ZikrCompletion,
           ],
-          synchronize: true, // Jadvallarni avtomatik yaratish
+          synchronize: false, // Production'da o'chirilgan - migration ishlatish kerak
           logging: false, // Disabled to reduce terminal noise
           ssl:
             configService.get("NODE_ENV") === "production"
