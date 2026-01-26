@@ -1,13 +1,14 @@
-import { Module } from '@nestjs/common';
-import { MulterModule } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
-import { UploadController } from './upload.controller';
-import { UploadService } from './upload.service';
-import { PrismaModule } from '../../prisma/prisma.module';
+import { Module } from "@nestjs/common";
+import { MulterModule } from "@nestjs/platform-express";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { memoryStorage } from "multer";
+import { UploadController } from "./upload.controller";
+import { UploadService } from "./upload.service";
+import { User } from "../users/entities";
 
 @Module({
   imports: [
-    PrismaModule,
+    TypeOrmModule.forFeature([User]),
     MulterModule.register({
       storage: memoryStorage(),
       limits: {

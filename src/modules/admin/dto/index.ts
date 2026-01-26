@@ -1,7 +1,18 @@
-import { IsString, IsOptional, IsEnum, IsNumber, IsArray, IsBoolean, Min, Max, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Role, Difficulty } from '@prisma/client';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsNumber,
+  IsArray,
+  IsBoolean,
+  Min,
+  Max,
+  ValidateNested,
+} from "class-validator";
+import { Type } from "class-transformer";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Role } from "../../users/entities/user.entity";
+import { Difficulty } from "../../questions/entities/question.entity";
 
 // ==================== USER MANAGEMENT ====================
 export class GetUsersDto {
@@ -42,15 +53,15 @@ export class GetUsersDto {
   @Type(() => Number)
   maxLevel?: number;
 
-  @ApiPropertyOptional({ default: 'createdAt' })
+  @ApiPropertyOptional({ default: "createdAt" })
   @IsOptional()
   @IsString()
-  sortBy?: string = 'createdAt';
+  sortBy?: string = "createdAt";
 
-  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @ApiPropertyOptional({ enum: ["asc", "desc"], default: "desc" })
   @IsOptional()
   @IsString()
-  sortOrder?: 'asc' | 'desc' = 'desc';
+  sortOrder?: "asc" | "desc" = "desc";
 }
 
 export class UpdateUserRoleDto {
@@ -68,7 +79,9 @@ export class BlockUserDto {
 }
 
 export class AdjustXPDto {
-  @ApiPropertyOptional({ description: 'Amount to add (positive) or subtract (negative)' })
+  @ApiPropertyOptional({
+    description: "Amount to add (positive) or subtract (negative)",
+  })
   @IsOptional()
   @IsNumber()
   amount?: number;
@@ -122,20 +135,20 @@ export class SendBulkMessageDto {
   @IsString()
   message?: string;
 
-  @ApiPropertyOptional({ description: 'Image URL for message' })
+  @ApiPropertyOptional({ description: "Image URL for message" })
   @IsOptional()
   @IsString()
   imageUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Video URL for message' })
+  @ApiPropertyOptional({ description: "Video URL for message" })
   @IsOptional()
   @IsString()
   videoUrl?: string;
 
-  @ApiPropertyOptional({ enum: ['all', 'selected', 'filter'] })
+  @ApiPropertyOptional({ enum: ["all", "selected", "filter"] })
   @IsOptional()
-  @IsEnum(['all', 'selected', 'filter'])
-  targetType?: 'all' | 'selected' | 'filter';
+  @IsEnum(["all", "selected", "filter"])
+  targetType?: "all" | "selected" | "filter";
 
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
@@ -143,7 +156,10 @@ export class SendBulkMessageDto {
   @IsString({ each: true })
   targetIds?: string[];
 
-  @ApiPropertyOptional({ type: [String], description: 'Channels: email, telegram, notification' })
+  @ApiPropertyOptional({
+    type: [String],
+    description: "Channels: email, telegram, notification",
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -181,12 +197,14 @@ export class QuestionImportItemDto {
   @IsString()
   explanation?: string;
 
-  @ApiPropertyOptional({ enum: ['EASY', 'MEDIUM', 'HARD'] })
+  @ApiPropertyOptional({ enum: ["EASY", "MEDIUM", "HARD"] })
   @IsOptional()
   @IsEnum(Difficulty)
-  difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+  difficulty?: "EASY" | "MEDIUM" | "HARD";
 
-  @ApiPropertyOptional({ description: 'Index in category difficultyLevels array' })
+  @ApiPropertyOptional({
+    description: "Index in category difficultyLevels array",
+  })
   @IsOptional()
   @IsNumber()
   levelIndex?: number;
@@ -285,27 +303,27 @@ export class GrowthStatsDto {
 
 // ==================== DESIGN SETTINGS ====================
 export class UpdateDesignDto {
-  @ApiPropertyOptional({ enum: ['default', 'custom'] })
+  @ApiPropertyOptional({ enum: ["default", "custom"] })
   @IsOptional()
   @IsString()
   theme?: string;
 
-  @ApiPropertyOptional({ description: 'Light mode video URL' })
+  @ApiPropertyOptional({ description: "Light mode video URL" })
   @IsOptional()
   @IsString()
   lightVideoUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Dark mode video URL' })
+  @ApiPropertyOptional({ description: "Dark mode video URL" })
   @IsOptional()
   @IsString()
   darkVideoUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Light mode image URL (fallback)' })
+  @ApiPropertyOptional({ description: "Light mode image URL (fallback)" })
   @IsOptional()
   @IsString()
   lightImageUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Dark mode image URL (fallback)' })
+  @ApiPropertyOptional({ description: "Dark mode image URL (fallback)" })
   @IsOptional()
   @IsString()
   darkImageUrl?: string;
@@ -358,7 +376,10 @@ export class CreateCategoryDto {
   @IsString()
   color?: string;
 
-  @ApiPropertyOptional({ description: 'programming, frontend, backend, database, devops, science, other' })
+  @ApiPropertyOptional({
+    description:
+      "programming, frontend, backend, database, devops, science, other",
+  })
   @IsOptional()
   @IsString()
   group?: string;
@@ -369,9 +390,10 @@ export class CreateCategoryDto {
   @Type(() => Number)
   order?: number;
 
-  @ApiPropertyOptional({ 
-    example: ['Oson', "O'rta", 'Qiyin'], 
-    description: 'Kategoriya uchun daraja nomlari (masalan: ["2022", "2023", "2024"])' 
+  @ApiPropertyOptional({
+    example: ["Oson", "O'rta", "Qiyin"],
+    description:
+      'Kategoriya uchun daraja nomlari (masalan: ["2022", "2023", "2024"])',
   })
   @IsOptional()
   @IsArray()
@@ -410,7 +432,10 @@ export class UpdateCategoryDto {
   @IsString()
   color?: string;
 
-  @ApiPropertyOptional({ description: 'programming, frontend, backend, database, devops, science, other' })
+  @ApiPropertyOptional({
+    description:
+      "programming, frontend, backend, database, devops, science, other",
+  })
   @IsOptional()
   @IsString()
   group?: string;
@@ -426,9 +451,9 @@ export class UpdateCategoryDto {
   @IsBoolean()
   isActive?: boolean;
 
-  @ApiPropertyOptional({ 
-    example: ['Oson', "O'rta", 'Qiyin'], 
-    description: 'Kategoriya uchun daraja nomlari' 
+  @ApiPropertyOptional({
+    example: ["Oson", "O'rta", "Qiyin"],
+    description: "Kategoriya uchun daraja nomlari",
   })
   @IsOptional()
   @IsArray()
@@ -442,7 +467,7 @@ export class ImportQuestionsTextDto {
   @IsString()
   categoryId?: string;
 
-  @ApiPropertyOptional({ description: 'Questions in namuna.txt format' })
+  @ApiPropertyOptional({ description: "Questions in namuna.txt format" })
   @IsOptional()
   @IsString()
   text?: string;
@@ -474,7 +499,9 @@ export class CreateCategoryWithQuestionsDto {
   @IsString()
   color?: string;
 
-  @ApiPropertyOptional({ description: 'Questions in namuna.txt format (min 300 questions)' })
+  @ApiPropertyOptional({
+    description: "Questions in namuna.txt format (min 300 questions)",
+  })
   @IsOptional()
   @IsString()
   questionsText?: string;

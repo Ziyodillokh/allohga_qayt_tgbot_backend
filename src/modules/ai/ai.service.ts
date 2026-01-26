@@ -1,6 +1,10 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { PrismaService } from "../../prisma/prisma.service";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, MoreThanOrEqual } from "typeorm";
+import { AIChat } from "./entities";
+import { User } from "../users/entities";
+import { Category } from "../categories/entities";
 import { ChatDto } from "./dto/chat.dto";
 
 @Injectable()
@@ -18,7 +22,12 @@ export class AIService {
 
   constructor(
     private configService: ConfigService,
-    private prisma: PrismaService
+    @InjectRepository(AIChat)
+    private aiChatRepository: Repository<AIChat>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
   ) {
     // OpenRouter API - works in all regions (bypasses geo-restrictions)
     this.apiKey =
@@ -37,23 +46,23 @@ export class AIService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const todayCount = await this.prisma.aIChat.count({
+    const todayCount = await this.aiChatRepository.count({
       where: {
         userId,
-        createdAt: { gte: today },
+        createdAt: MoreThanOrEqual(today),
       },
     });
 
     if (todayCount >= 100) {
       throw new BadRequestException(
-        "Kunlik so'rovlar limiti tugadi (100 ta). Ertaga qaytadan urinib ko'ring."
+        "Kunlik so'rovlar limiti tugadi (100 ta). Ertaga qaytadan urinib ko'ring.",
       );
     }
 
     // Get chat history for context
-    const chatHistory = await this.prisma.aIChat.findMany({
+    const chatHistory = await this.aiChatRepository.find({
       where: { userId },
-      orderBy: { createdAt: "desc" },
+      order: { createdAt: "DESC" },
       take: 10,
       select: { message: true, response: true },
     });
@@ -91,7 +100,7 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
         "AI Request - Models:",
         this.models,
         "Message:",
-        dto.message.substring(0, 50)
+        dto.message.substring(0, 50),
       );
 
       let aiResponse: string | null = null;
@@ -129,7 +138,7 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
               model,
               ":",
               response.status,
-              responseText
+              responseText,
             );
             lastError = new Error(`API error: ${response.status}`);
             continue; // Try next model
@@ -163,39 +172,39 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
       // Get category ID if slug provided
       let categoryId: string | null = null;
       if (dto.categorySlug) {
-        const category = await this.prisma.category.findUnique({
+        const category = await this.categoryRepository.findOne({
           where: { slug: dto.categorySlug },
         });
         categoryId = category?.id || null;
       }
 
       // Save to database
-      const aiChat = await this.prisma.aIChat.create({
-        data: {
-          userId,
-          categoryId,
-          message: dto.message,
-          response: aiResponse,
-        },
-        include: {
-          category: {
-            select: { id: true, name: true, slug: true },
-          },
-        },
+      const newChat = this.aiChatRepository.create({
+        userId,
+        categoryId,
+        message: dto.message,
+        response: aiResponse,
+      });
+      const savedChat = await this.aiChatRepository.save(newChat);
+
+      // Load category relation
+      const aiChat = await this.aiChatRepository.findOne({
+        where: { id: savedChat.id },
+        relations: ["category"],
       });
 
       return {
-        id: aiChat.id,
+        id: savedChat.id,
         message: dto.message,
         response: aiResponse,
-        category: aiChat.category,
-        createdAt: aiChat.createdAt,
+        category: aiChat?.category || null,
+        createdAt: savedChat.createdAt,
         remainingQueries: 100 - todayCount - 1,
       };
     } catch (error) {
       console.error("AI Error:", error);
       throw new BadRequestException(
-        "AI javob berishda xatolik yuz berdi. Qaytadan urinib ko'ring."
+        "AI javob berishda xatolik yuz berdi. Qaytadan urinib ko'ring.",
       );
     }
   }
@@ -203,20 +212,13 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
   async getChatHistory(userId: string, page = 1, limit = 50) {
     const skip = (page - 1) * limit;
 
-    const [chats, total] = await Promise.all([
-      this.prisma.aIChat.findMany({
-        where: { userId },
-        include: {
-          category: {
-            select: { id: true, name: true, slug: true },
-          },
-        },
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit,
-      }),
-      this.prisma.aIChat.count({ where: { userId } }),
-    ]);
+    const [chats, total] = await this.aiChatRepository.findAndCount({
+      where: { userId },
+      relations: ["category"],
+      order: { createdAt: "DESC" },
+      skip,
+      take: limit,
+    });
 
     return {
       chats,
@@ -230,9 +232,7 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
   }
 
   async clearChatHistory(userId: string) {
-    await this.prisma.aIChat.deleteMany({
-      where: { userId },
-    });
+    await this.aiChatRepository.delete({ userId });
 
     return { message: "Chat tarixi tozalandi" };
   }
@@ -241,10 +241,10 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const count = await this.prisma.aIChat.count({
+    const count = await this.aiChatRepository.count({
       where: {
         userId,
-        createdAt: { gte: today },
+        createdAt: MoreThanOrEqual(today),
       },
     });
 

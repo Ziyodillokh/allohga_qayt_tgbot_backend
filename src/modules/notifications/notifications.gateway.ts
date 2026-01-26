@@ -6,18 +6,22 @@ import {
   OnGatewayDisconnect,
   ConnectedSocket,
   MessageBody,
-} from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
-import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
+} from "@nestjs/websockets";
+import { Server, Socket } from "socket.io";
+import { JwtService } from "@nestjs/jwt";
+import { ConfigService } from "@nestjs/config";
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: "*",
+    credentials: true,
   },
-  namespace: '/notifications',
+  namespace: "/notifications",
+  transports: ["websocket", "polling"],
 })
-export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class NotificationsGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
@@ -30,15 +34,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
   async handleConnection(client: Socket) {
     try {
-      const token = client.handshake.auth.token || client.handshake.headers.authorization?.replace('Bearer ', '');
-      
+      const token =
+        client.handshake.auth.token ||
+        client.handshake.headers.authorization?.replace("Bearer ", "");
+
       if (!token) {
         client.disconnect();
         return;
       }
 
       const payload = this.jwtService.verify(token, {
-        secret: this.configService.get('JWT_SECRET'),
+        secret: this.configService.get("JWT_SECRET"),
       });
 
       const userId = payload.sub;
@@ -55,7 +61,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       console.log(`User ${userId} connected with socket ${client.id}`);
     } catch (error) {
-      console.error('WebSocket auth error:', error);
+      console.error("WebSocket auth error:", error);
       client.disconnect();
     }
   }
@@ -75,15 +81,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   sendToUser(userId: string, notification: any) {
-    this.server.to(`user:${userId}`).emit('notification', notification);
+    this.server.to(`user:${userId}`).emit("notification", notification);
   }
 
   sendToAll(notification: any) {
-    this.server.emit('notification', notification);
+    this.server.emit("notification", notification);
   }
 
-  @SubscribeMessage('ping')
+  @SubscribeMessage("ping")
   handlePing(@ConnectedSocket() client: Socket) {
-    return { event: 'pong', data: { timestamp: Date.now() } };
+    return { event: "pong", data: { timestamp: Date.now() } };
   }
 }

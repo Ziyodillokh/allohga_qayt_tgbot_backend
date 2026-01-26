@@ -19,11 +19,37 @@ import { TestsService } from "./tests.service";
 import { StartTestDto } from "./dto/start-test.dto";
 import { SubmitTestDto } from "./dto/submit-test.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { OptionalJwtAuthGuard } from "../auth/guards/optional-jwt-auth.guard";
 
 @ApiTags("tests")
 @Controller("tests")
 export class TestsController {
   constructor(private testsService: TestsService) {}
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Post("save-result")
+  @ApiOperation({ summary: "Test natijasini saqlash (Public)" })
+  @ApiResponse({
+    status: 201,
+    description: "Test natijasi saqlandi",
+  })
+  async saveTestResult(
+    @Req() req: any,
+    @Body()
+    dto: {
+      categorySlug: string;
+      score: number;
+      totalQuestions: number;
+      totalXP: number;
+      answers: { questionId: string; answer: number; isCorrect: boolean }[];
+    },
+  ) {
+    // Extract user ID from token if provided
+    const userId = req.user?.id || null;
+    console.log("[saveTestResult] User from request:", req.user);
+    console.log("[saveTestResult] UserId:", userId);
+    return this.testsService.saveTestResult(userId, dto);
+  }
 
   @Post("start")
   @ApiOperation({ summary: "Yangi test boshlash" })
@@ -46,7 +72,7 @@ export class TestsController {
   async submitTest(
     @Req() req: any,
     @Param("testAttemptId") testAttemptId: string,
-    @Body() dto: SubmitTestDto
+    @Body() dto: SubmitTestDto,
   ) {
     return this.testsService.submitTest(req.user.id, testAttemptId, dto);
   }
@@ -58,7 +84,7 @@ export class TestsController {
   @ApiResponse({ status: 200, description: "Test natijasi" })
   async getTestResult(
     @Req() req: any,
-    @Param("testAttemptId") testAttemptId: string
+    @Param("testAttemptId") testAttemptId: string,
   ) {
     return this.testsService.getTestResult(req.user.id, testAttemptId);
   }
@@ -73,7 +99,7 @@ export class TestsController {
   async getTestHistory(
     @Req() req: any,
     @Query("page") page?: number,
-    @Query("limit") limit?: number
+    @Query("limit") limit?: number,
   ) {
     return this.testsService.getUserTestHistory(req.user.id, page, limit);
   }

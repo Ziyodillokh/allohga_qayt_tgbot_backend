@@ -3,8 +3,27 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
-import {} from "@prisma/client";
+import { InjectRepository } from "@nestjs/typeorm";
+import {
+  Repository,
+  MoreThanOrEqual,
+  LessThan,
+  In,
+  ILike,
+  Not,
+  IsNull,
+  DataSource,
+} from "typeorm";
+import { User } from "../users/entities";
+import { Category, CategoryStat } from "../categories/entities";
+import { Question, Difficulty } from "../questions/entities";
+import { TestAttempt, TestAnswer } from "../tests/entities";
+import { AIChat } from "../ai/entities";
+import { UserAchievement } from "../achievements/entities";
+import { Notification } from "../notifications/entities";
+import { AdminMessage, Setting, DesignSetting } from "./entities";
+import { WeeklyXP, MonthlyXP } from "../leaderboard/entities";
+import { Zikr, ZikrCompletion } from "../zikr/entities";
 import { NotificationsService } from "../notifications/notifications.service";
 import { MailService } from "../mail/mail.service";
 import { TelegramService } from "../telegram/telegram.service";
@@ -12,10 +31,42 @@ import { TelegramService } from "../telegram/telegram.service";
 @Injectable()
 export class AdminService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
+    @InjectRepository(Question)
+    private questionRepository: Repository<Question>,
+    @InjectRepository(TestAttempt)
+    private testAttemptRepository: Repository<TestAttempt>,
+    @InjectRepository(TestAnswer)
+    private testAnswerRepository: Repository<TestAnswer>,
+    @InjectRepository(CategoryStat)
+    private categoryStatRepository: Repository<CategoryStat>,
+    @InjectRepository(AIChat)
+    private aiChatRepository: Repository<AIChat>,
+    @InjectRepository(UserAchievement)
+    private userAchievementRepository: Repository<UserAchievement>,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
+    @InjectRepository(AdminMessage)
+    private adminMessageRepository: Repository<AdminMessage>,
+    @InjectRepository(WeeklyXP)
+    private weeklyXPRepository: Repository<WeeklyXP>,
+    @InjectRepository(MonthlyXP)
+    private monthlyXPRepository: Repository<MonthlyXP>,
+    @InjectRepository(Setting)
+    private settingRepository: Repository<Setting>,
+    @InjectRepository(DesignSetting)
+    private designSettingRepository: Repository<DesignSetting>,
+    @InjectRepository(Zikr)
+    private zikrRepository: Repository<Zikr>,
+    @InjectRepository(ZikrCompletion)
+    private zikrCompletionRepository: Repository<ZikrCompletion>,
+    private dataSource: DataSource,
     private notificationsService: NotificationsService,
     private mailService: MailService,
-    private telegramService: TelegramService
+    private telegramService: TelegramService,
   ) {}
 
   // ==================== DASHBOARD ====================
@@ -33,38 +84,64 @@ export class AdminService {
       totalUsers,
       todayUsers,
       weekUsers,
-      totalTests,
-      todayTests,
+      totalTestsResult,
+      todayTestsResult,
       totalQuestions,
       totalCategories,
       totalAIChats,
       todayAIChats,
-      avgTestScore,
+      avgTestScoreResult,
       topCategories,
+      totalXPResult,
+      totalZikrResult,
     ] = await Promise.all([
-      this.prisma.user.count(),
-      this.prisma.user.count({ where: { createdAt: { gte: today } } }),
-      this.prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
-      this.prisma.testAttempt.count(),
-      this.prisma.testAttempt.count({ where: { completedAt: { gte: today } } }),
-      this.prisma.question.count(),
-      this.prisma.category.count({ where: { isActive: true } }),
-      this.prisma.aIChat.count(),
-      this.prisma.aIChat.count({ where: { createdAt: { gte: today } } }),
-      this.prisma.testAttempt.aggregate({
-        _avg: { score: true },
-        where: { completedAt: { not: null } },
+      this.userRepository.count(),
+      this.userRepository.count({
+        where: { createdAt: MoreThanOrEqual(today) },
       }),
-      // Top kategoriyalar - faqat yakunlangan testlar soni bo'yicha
-      this.prisma.$queryRaw`
-        SELECT c.id, c.name, COUNT(t.id)::int as "testsCount"
-        FROM "Category" c
-        LEFT JOIN "TestAttempt" t ON t."categoryId" = c.id AND t."completedAt" IS NOT NULL
+      this.userRepository.count({
+        where: { createdAt: MoreThanOrEqual(weekAgo) },
+      }),
+      // Jami yechilgan savollar soni (1 savol = 1 test)
+      this.testAnswerRepository.count(),
+      // Bugun yechilgan savollar soni
+      this.testAnswerRepository.count({
+        where: { createdAt: MoreThanOrEqual(today) },
+      }),
+      this.questionRepository.count(),
+      this.categoryRepository.count({ where: { isActive: true } }),
+      this.aiChatRepository.count(),
+      this.aiChatRepository.count({
+        where: { createdAt: MoreThanOrEqual(today) },
+      }),
+      this.testAttemptRepository
+        .createQueryBuilder("t")
+        .select("AVG(t.score)", "avg")
+        .where("t.completedAt IS NOT NULL")
+        .getRawOne(),
+      // Top kategoriyalar - yechilgan savollar soni bo'yicha (1 savol = 1 test)
+      this.dataSource.query(`
+        SELECT c.id, c.name, COUNT(ta.id)::int as "testsCount"
+        FROM "categories" c
+        LEFT JOIN "test_attempts" t ON t."categoryId" = c.id AND t."completedAt" IS NOT NULL
+        LEFT JOIN "test_answers" ta ON ta."testAttemptId" = t.id
         WHERE c."isActive" = true
         GROUP BY c.id, c.name
         ORDER BY "testsCount" DESC
         LIMIT 5
-      ` as Promise<Array<{ id: string; name: string; testsCount: number }>>,
+      `) as Promise<Array<{ id: string; name: string; testsCount: number }>>,
+      // Total XP earned
+      this.testAttemptRepository
+        .createQueryBuilder("t")
+        .select("COALESCE(SUM(t.xpEarned), 0)", "total")
+        .where("t.completedAt IS NOT NULL")
+        .getRawOne(),
+      // Total zikr count (sum of zikr.count for each completion, not just completion count)
+      this.dataSource.query(`
+        SELECT COALESCE(SUM(z.count), 0)::int as total
+        FROM "zikr_completions" zc
+        INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+      `),
     ]);
 
     return {
@@ -74,9 +151,9 @@ export class AdminService {
         thisWeek: weekUsers,
       },
       tests: {
-        total: totalTests,
-        today: todayTests,
-        averageScore: avgTestScore._avg.score || 0,
+        total: totalTestsResult,
+        today: todayTestsResult,
+        averageScore: avgTestScoreResult?.avg || 0,
       },
       questions: totalQuestions,
       categories: totalCategories,
@@ -84,6 +161,8 @@ export class AdminService {
         total: totalAIChats,
         today: todayAIChats,
       },
+      totalXP: parseInt(totalXPResult?.total) || 0,
+      totalZikr: totalZikrResult?.[0]?.total || 0,
       topCategories: topCategories.map((c) => ({
         id: c.id,
         name: c.name,
@@ -97,17 +176,21 @@ export class AdminService {
     startDate.setDate(startDate.getDate() - days);
     startDate.setHours(0, 0, 0, 0);
 
-    const users = await this.prisma.user.groupBy({
-      by: ["createdAt"],
-      where: { createdAt: { gte: startDate } },
-      _count: true,
-    });
+    const users = await this.userRepository
+      .createQueryBuilder("u")
+      .select("DATE(u.createdAt)", "date")
+      .addSelect("COUNT(*)", "count")
+      .where("u.createdAt >= :startDate", { startDate })
+      .groupBy("DATE(u.createdAt)")
+      .getRawMany();
 
-    const tests = await this.prisma.testAttempt.groupBy({
-      by: ["completedAt"],
-      where: { completedAt: { gte: startDate } },
-      _count: true,
-    });
+    const tests = await this.testAttemptRepository
+      .createQueryBuilder("t")
+      .select("DATE(t.completedAt)", "date")
+      .addSelect("COUNT(*)", "count")
+      .where("t.completedAt >= :startDate", { startDate })
+      .groupBy("DATE(t.completedAt)")
+      .getRawMany();
 
     // Group by date
     const usersByDate = new Map<string, number>();
@@ -122,14 +205,16 @@ export class AdminService {
     }
 
     users.forEach((u) => {
-      const key = u.createdAt.toISOString().split("T")[0];
-      usersByDate.set(key, (usersByDate.get(key) || 0) + u._count);
+      const key =
+        u.date instanceof Date ? u.date.toISOString().split("T")[0] : u.date;
+      usersByDate.set(key, parseInt(u.count) || 0);
     });
 
     tests.forEach((t) => {
-      if (t.completedAt) {
-        const key = t.completedAt.toISOString().split("T")[0];
-        testsByDate.set(key, (testsByDate.get(key) || 0) + t._count);
+      if (t.date) {
+        const key =
+          t.date instanceof Date ? t.date.toISOString().split("T")[0] : t.date;
+        testsByDate.set(key, parseInt(t.count) || 0);
       }
     });
 
@@ -168,65 +253,77 @@ export class AdminService {
     } = params;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const queryBuilder = this.userRepository.createQueryBuilder("user");
 
     if (search) {
-      where.OR = [
-        { username: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
-        { fullName: { contains: search, mode: "insensitive" } },
-      ];
+      queryBuilder.where(
+        "(user.username ILIKE :search OR user.email ILIKE :search OR user.fullName ILIKE :search)",
+        { search: `%${search}%` },
+      );
     }
 
-    // if (role) where.role = role;
-    if (minLevel) where.level = { gte: minLevel };
-    if (maxLevel) where.level = { ...where.level, lte: maxLevel };
+    // if (role) queryBuilder.andWhere("user.role = :role", { role });
+    if (minLevel)
+      queryBuilder.andWhere("user.level >= :minLevel", { minLevel });
+    if (maxLevel)
+      queryBuilder.andWhere("user.level <= :maxLevel", { maxLevel });
 
-    const [users, total] = await Promise.all([
-      this.prisma.user.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { [sortBy]: sortOrder },
-        select: {
-          id: true,
-          email: true,
-          username: true,
-          fullName: true,
-          avatar: true,
-          totalXP: true,
-          level: true,
-          role: true,
-          isActive: true,
-          phone: true,
-          telegramId: true,
-          telegramUsername: true,
-          telegramPhone: true,
+    queryBuilder
+      .select([
+        "user.id",
+        "user.email",
+        "user.username",
+        "user.fullName",
+        "user.avatar",
+        "user.totalXP",
+        "user.level",
+        "user.testsCompleted",
+        "user.zikrCount",
+        "user.role",
+        "user.isActive",
+        "user.phone",
+        "user.telegramId",
+        "user.telegramUsername",
+        "user.telegramPhone",
+        "user.createdAt",
+      ])
+      .orderBy(`user.${sortBy}`, sortOrder.toUpperCase() as "ASC" | "DESC")
+      .skip(skip)
+      .take(limit);
 
-          createdAt: true,
-        },
-      }),
-      this.prisma.user.count({ where }),
-    ]);
+    const [users, total] = await queryBuilder.getManyAndCount();
 
-    // Get completed tests count for each user
-    const usersWithTestCount = await Promise.all(
+    // Har bir user uchun yechilgan savollar va zikrlar sonini hisoblash
+    const usersWithCounts = await Promise.all(
       users.map(async (user) => {
-        const completedTests = await this.prisma.testAttempt.count({
-          where: {
-            userId: user.id,
-            completedAt: { not: null },
-          },
-        });
+        // test_answers jadvalidan user yechgan savollar sonini olish (1 savol = 1 test)
+        const completedTests = await this.testAnswerRepository
+          .createQueryBuilder("ta")
+          .innerJoin("ta.testAttempt", "t")
+          .where("t.userId = :userId", { userId: user.id })
+          .getCount();
+
+        // zikr_completions jadvalidan user zikr sonini olish (zikr.count bo'yicha)
+        const zikrCountResult = await this.dataSource.query(
+          `
+          SELECT COALESCE(SUM(z.count), 0)::int as total
+          FROM "zikr_completions" zc
+          INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+          WHERE zc."userId" = $1
+        `,
+          [user.id],
+        );
+
         return {
           ...user,
-          completedTests,
+          completedTests: completedTests || user.testsCompleted || 0,
+          zikrCount: zikrCountResult?.[0]?.total || user.zikrCount || 0,
         };
-      })
+      }),
     );
 
     return {
-      users: usersWithTestCount,
+      users: usersWithCounts,
       pagination: {
         page,
         limit,
@@ -237,65 +334,77 @@ export class AdminService {
   }
 
   async getUserDetails(userId: string) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.userRepository.findOne({
       where: { id: userId },
-      include: {
-        categoryStats: {
-          include: { category: true },
-        },
-        userAchievements: {
-          include: { achievement: true },
-        },
-        testAttempts: {
-          take: 10,
-          orderBy: { completedAt: "desc" },
-          include: { category: true },
-        },
-        aiChats: {
-          take: 20,
-          orderBy: { createdAt: "desc" },
-        },
-        _count: {
-          select: {
-            testAttempts: true,
-            aiChats: true,
-            userAchievements: true,
-          },
-        },
-      },
+      relations: [
+        "categoryStats",
+        "categoryStats.category",
+        "userAchievements",
+        "userAchievements.achievement",
+      ],
     });
 
     if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
 
-    // Get ranking
-    const rank = await this.prisma.user.count({
-      where: { totalXP: { gt: user.totalXP } },
+    // Get test attempts separately with limit
+    const testAttempts = await this.testAttemptRepository.find({
+      where: { userId },
+      order: { completedAt: "DESC" },
+      take: 10,
+      relations: ["category"],
     });
 
-    return { ...user, rank: rank + 1 };
+    // Get AI chats separately with limit
+    const aiChats = await this.aiChatRepository.find({
+      where: { userId },
+      order: { createdAt: "DESC" },
+      take: 20,
+    });
+
+    // Get counts
+    const [testAttemptsCount, aiChatsCount, userAchievementsCount] =
+      await Promise.all([
+        this.testAttemptRepository.count({ where: { userId } }),
+        this.aiChatRepository.count({ where: { userId } }),
+        this.userAchievementRepository.count({ where: { userId } }),
+      ]);
+
+    // Get ranking
+    const rank = await this.userRepository.count({
+      where: { totalXP: MoreThanOrEqual(user.totalXP + 1) },
+    });
+
+    return {
+      ...user,
+      testAttempts,
+      aiChats,
+      _count: {
+        testAttempts: testAttemptsCount,
+        aiChats: aiChatsCount,
+        userAchievements: userAchievementsCount,
+      },
+      rank: rank + 1,
+    };
   }
 
   async blockUser(userId: string, blocked: boolean) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
 
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { isActive: !blocked },
-    });
+    user.isActive = !blocked;
+    return this.userRepository.save(user);
   }
 
   async adjustUserXP(userId: string, amount: number, reason: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
 
     const newXP = Math.max(0, user.totalXP + amount);
     const newLevel = this.calculateLevel(newXP);
 
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: { totalXP: newXP, level: newLevel },
-    });
+    user.totalXP = newXP;
+    user.level = newLevel;
+    const updated = await this.userRepository.save(user);
 
     await this.notificationsService.createNotification(userId, {
       title: amount > 0 ? "XP qo'shildi" : "XP ayirildi",
@@ -307,21 +416,42 @@ export class AdminService {
   }
 
   async deleteUser(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
 
-    // Delete related data first
-    await this.prisma.$transaction([
-      this.prisma.testAnswer.deleteMany({ where: { testAttempt: { userId } } }),
-      this.prisma.testAttempt.deleteMany({ where: { userId } }),
-      this.prisma.categoryStat.deleteMany({ where: { userId } }),
-      this.prisma.aIChat.deleteMany({ where: { userId } }),
-      this.prisma.userAchievement.deleteMany({ where: { userId } }),
-      this.prisma.notification.deleteMany({ where: { userId } }),
-      this.prisma.weeklyXP.deleteMany({ where: { userId } }),
-      this.prisma.monthlyXP.deleteMany({ where: { userId } }),
-      this.prisma.user.delete({ where: { id: userId } }),
-    ]);
+    // Delete related data using queryRunner for transaction
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Delete test answers for user's test attempts
+      await queryRunner.manager
+        .createQueryBuilder()
+        .delete()
+        .from(TestAnswer)
+        .where(
+          'testAttemptId IN (SELECT id FROM test_attempts WHERE "userId" = :userId)',
+          { userId },
+        )
+        .execute();
+
+      await queryRunner.manager.delete(TestAttempt, { userId });
+      await queryRunner.manager.delete(CategoryStat, { userId });
+      await queryRunner.manager.delete(AIChat, { userId });
+      await queryRunner.manager.delete(UserAchievement, { userId });
+      await queryRunner.manager.delete(Notification, { userId });
+      await queryRunner.manager.delete(WeeklyXP, { userId });
+      await queryRunner.manager.delete(MonthlyXP, { userId });
+      await queryRunner.manager.delete(User, { id: userId });
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
 
     return { message: "Foydalanuvchi o'chirildi" };
   }
@@ -346,39 +476,52 @@ export class AdminService {
     let userIds: string[] = [];
 
     if (targetType === "all") {
-      const users = await this.prisma.user.findMany({
+      const users = await this.userRepository.find({
         where: { isActive: true },
-        select: { id: true },
+        select: ["id"],
       });
       userIds = users.map((u) => u.id);
     } else if (targetType === "selected" && targetIds) {
       userIds = targetIds;
     } else if (targetType === "filter" && filter) {
-      const where: any = { isActive: true };
+      const queryBuilder = this.userRepository
+        .createQueryBuilder("user")
+        .select("user.id")
+        .where("user.isActive = :isActive", { isActive: true });
 
-      if (filter.minLevel) where.level = { gte: filter.minLevel };
-      if (filter.maxLevel)
-        where.level = { ...where.level, lte: filter.maxLevel };
-      if (filter.minXP) where.totalXP = { gte: filter.minXP };
+      if (filter.minLevel) {
+        queryBuilder.andWhere("user.level >= :minLevel", {
+          minLevel: filter.minLevel,
+        });
+      }
+      if (filter.maxLevel) {
+        queryBuilder.andWhere("user.level <= :maxLevel", {
+          maxLevel: filter.maxLevel,
+        });
+      }
+      if (filter.minXP) {
+        queryBuilder.andWhere("user.totalXP >= :minXP", {
+          minXP: filter.minXP,
+        });
+      }
 
       if (filter.inactiveDays) {
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - filter.inactiveDays);
-        where.lastActiveAt = { lt: cutoff };
+        queryBuilder.andWhere("user.lastActiveAt < :cutoff", { cutoff });
       }
 
       if (filter.categoryId) {
-        const categoryUsers = await this.prisma.testAttempt.findMany({
+        const categoryUsers = await this.testAttemptRepository.find({
           where: { categoryId: filter.categoryId },
-          select: { userId: true },
-          distinct: ["userId"],
+          select: ["userId"],
         });
-        userIds = categoryUsers.map((u) => u.userId || "");
+        const uniqueUserIds = [
+          ...new Set(categoryUsers.map((u) => u.userId).filter(Boolean)),
+        ];
+        userIds = uniqueUserIds as string[];
       } else {
-        const users = await this.prisma.user.findMany({
-          where,
-          select: { id: true },
-        });
+        const users = await queryBuilder.getMany();
         userIds = users.map((u) => u.id);
       }
     }
@@ -388,16 +531,15 @@ export class AdminService {
     }
 
     // Create admin message record
-    const adminMessage = await this.prisma.adminMessage.create({
-      data: {
-        adminId,
-        targetType,
-        targetIds: userIds,
-        title,
-        message,
-        sentAt: new Date(),
-      },
+    const adminMessage = this.adminMessageRepository.create({
+      adminId,
+      targetType,
+      targetIds: userIds,
+      title,
+      message,
+      sentAt: new Date(),
     });
+    await this.adminMessageRepository.save(adminMessage);
 
     // Send notifications
     await Promise.all(
@@ -406,8 +548,8 @@ export class AdminService {
           title,
           message,
           // type: NotificationType.MESSAGE,
-        })
-      )
+        }),
+      ),
     );
 
     return {
@@ -419,27 +561,28 @@ export class AdminService {
   async getMessageHistory(
     adminId: string,
     page: number = 1,
-    limit: number = 20
+    limit: number = 20,
   ) {
     const skip = (page - 1) * limit;
 
-    const [messages, total] = await Promise.all([
-      this.prisma.adminMessage.findMany({
-        where: { adminId },
-        skip,
-        take: limit,
-        orderBy: { sentAt: "desc" },
-        include: {
-          admin: {
-            select: { username: true, fullName: true },
-          },
-        },
-      }),
-      this.prisma.adminMessage.count({ where: { adminId } }),
-    ]);
+    const [messages, total] = await this.adminMessageRepository.findAndCount({
+      where: { adminId },
+      skip,
+      take: limit,
+      order: { sentAt: "DESC" },
+      relations: ["admin"],
+    });
+
+    // Format messages to include only needed admin fields
+    const formattedMessages = messages.map((m) => ({
+      ...m,
+      admin: m.admin
+        ? { username: m.admin.username, fullName: m.admin.fullName }
+        : null,
+    }));
 
     return {
-      messages,
+      messages: formattedMessages,
       pagination: {
         page,
         limit,
@@ -457,22 +600,26 @@ export class AdminService {
       options: string[];
       correctAnswer: number;
       explanation?: string;
-      difficulty: "EASY" | "MEDIUM" | "HARD";
+      difficulty: Difficulty;
       levelIndex?: number;
       tags?: string[];
     }>;
   }) {
     const { categoryId, questions } = data;
 
-    const category = await this.prisma.category.findUnique({
+    const category = await this.categoryRepository.findOne({
       where: { id: categoryId },
     });
     if (!category) throw new NotFoundException("Kategoriya topilmadi");
 
-    const xpMap = { EASY: 5, MEDIUM: 10, HARD: 15 };
+    const xpMap = {
+      [Difficulty.EASY]: 5,
+      [Difficulty.MEDIUM]: 10,
+      [Difficulty.HARD]: 15,
+    };
 
-    const created = await this.prisma.question.createMany({
-      data: questions.map((q) => ({
+    const questionsToCreate = questions.map((q) =>
+      this.questionRepository.create({
         categoryId,
         question: q.question,
         options: q.options,
@@ -483,18 +630,20 @@ export class AdminService {
         xpReward: xpMap[q.difficulty],
         tags: q.tags || [],
         isActive: true,
-      })),
-    });
+      }),
+    );
 
-    return { imported: created.count };
+    const result = await this.questionRepository.save(questionsToCreate);
+
+    return { imported: result.length };
   }
 
   async exportQuestions(categoryId?: string) {
     const where = categoryId ? { categoryId } : {};
 
-    const questions = await this.prisma.question.findMany({
+    const questions = await this.questionRepository.find({
       where,
-      include: { category: { select: { name: true, slug: true } } },
+      relations: ["category"],
     });
 
     return questions.map((q) => ({
@@ -514,7 +663,7 @@ export class AdminService {
 
   // ==================== SETTINGS ====================
   async getSettings() {
-    const settings = await this.prisma.setting.findMany();
+    const settings = await this.settingRepository.find();
     const result: Record<string, any> = {};
     settings.forEach((s) => {
       result[s.key] = s.value;
@@ -523,13 +672,19 @@ export class AdminService {
   }
 
   async updateSettings(settings: Record<string, any>) {
-    const updates = Object.entries(settings).map(([key, value]) =>
-      this.prisma.setting.upsert({
-        where: { key },
-        update: { value: JSON.stringify(value) },
-        create: { key, value: JSON.stringify(value) },
-      })
-    );
+    const updates = Object.entries(settings).map(async ([key, value]) => {
+      const existing = await this.settingRepository.findOne({ where: { key } });
+      if (existing) {
+        existing.value = JSON.stringify(value);
+        return this.settingRepository.save(existing);
+      } else {
+        const newSetting = this.settingRepository.create({
+          key,
+          value: JSON.stringify(value),
+        });
+        return this.settingRepository.save(newSetting);
+      }
+    });
 
     await Promise.all(updates);
     return this.getSettings();
@@ -550,50 +705,112 @@ export class AdminService {
   async getExtendedDashboard() {
     const basicStats = await this.getDashboardStats();
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     // Active users (last 7 days)
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const activeUsers = await this.prisma.user.findMany({
-      where: { lastActiveAt: { gte: weekAgo } },
-      orderBy: { lastActiveAt: "desc" },
+    const activeUsers = await this.userRepository.find({
+      where: { lastActiveAt: MoreThanOrEqual(weekAgo) },
+      order: { lastActiveAt: "DESC" },
       take: 10,
-      select: {
-        id: true,
-        username: true,
-        fullName: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        lastActiveAt: true,
-      },
+      select: [
+        "id",
+        "username",
+        "fullName",
+        "avatar",
+        "totalXP",
+        "level",
+        "lastActiveAt",
+      ],
     });
 
+    // ============ ZIKR STATISTICS ============
+    const [
+      totalZikrs,
+      activeZikrs,
+      totalZikrCompletionsResult,
+      todayZikrCompletionsResult,
+      weekZikrCompletionsResult,
+      totalZikrXpEarnedResult,
+    ] = await Promise.all([
+      this.zikrRepository.count(),
+      this.zikrRepository.count({ where: { isActive: true } }),
+      // Jami zikr soni (zikr.count bo'yicha)
+      this.dataSource.query(`
+        SELECT COALESCE(SUM(z.count), 0)::int as total
+        FROM "zikr_completions" zc
+        INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+      `),
+      // Bugungi zikr soni
+      this.dataSource.query(
+        `
+        SELECT COALESCE(SUM(z.count), 0)::int as total
+        FROM "zikr_completions" zc
+        INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+        WHERE zc."completedAt" >= $1
+      `,
+        [today],
+      ),
+      // Haftalik zikr soni
+      this.dataSource.query(
+        `
+        SELECT COALESCE(SUM(z.count), 0)::int as total
+        FROM "zikr_completions" zc
+        INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+        WHERE zc."completedAt" >= $1
+      `,
+        [weekAgo],
+      ),
+      this.zikrCompletionRepository
+        .createQueryBuilder("zc")
+        .select("SUM(zc.xpEarned)", "sum")
+        .getRawOne(),
+    ]);
+
+    // Top zikrs by completions
+    const topZikrs = await this.zikrRepository
+      .createQueryBuilder("z")
+      .leftJoin("z.completions", "c")
+      .where("z.isActive = :isActive", { isActive: true })
+      .select(["z.id", "z.titleLatin", "z.emoji", "z.count", "z.xpReward"])
+      .addSelect("COUNT(c.id)", "completions_count")
+      .groupBy("z.id")
+      .orderBy('"completions_count"', "DESC")
+      .take(5)
+      .getRawMany();
+
+    // Zikr completions by day of week
+    const zikrsByDay = await this.zikrRepository
+      .createQueryBuilder("z")
+      .where("z.isActive = :isActive", { isActive: true })
+      .select("z.dayOfWeek", "dayOfWeek")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("z.dayOfWeek")
+      .getRawMany();
+
     // Categories with unused questions (questions not yet answered by any user)
-    const categoriesWithQuestions = await this.prisma.category.findMany({
+    const categoriesWithQuestions = await this.categoryRepository.find({
       where: { isActive: true },
-      include: {
-        _count: { select: { questions: true } },
-        questions: {
-          select: { id: true },
-        },
-      },
+      relations: ["questions"],
     });
 
     // Get all used question IDs (questions that appear in TestAnswer)
-    const usedQuestionIds = await this.prisma.testAnswer.findMany({
-      select: { questionId: true },
-      distinct: ["questionId"],
-    });
+    const usedQuestionIds = await this.testAnswerRepository
+      .createQueryBuilder("ta")
+      .select("DISTINCT ta.questionId", "questionId")
+      .getRawMany();
     const usedSet = new Set(usedQuestionIds.map((q) => q.questionId));
 
     const lowQuestionCategories = await Promise.all(
       categoriesWithQuestions.map(async (c) => {
         // Count unused questions for this category
         const unusedCount = c.questions.filter(
-          (q) => !usedSet.has(q.id)
+          (q) => !usedSet.has(q.id),
         ).length;
-        const totalCount = c._count.questions;
+        const totalCount = c.questions.length;
         const usedCount = totalCount - unusedCount;
 
         return {
@@ -606,39 +823,63 @@ export class AdminService {
           questionsCount: unusedCount, // For backward compatibility
           needed: 300 - unusedCount,
         };
-      })
+      }),
     );
 
     // Sort by unused questions (ascending - lowest unused first)
     lowQuestionCategories.sort((a, b) => a.unusedQuestions - b.unusedQuestions);
 
     // Question distribution by difficulty
-    const questionsByDifficulty = await this.prisma.question.groupBy({
-      by: ["difficulty"],
-      _count: true,
-    });
+    const questionsByDifficulty = await this.questionRepository
+      .createQueryBuilder("q")
+      .select("q.difficulty", "difficulty")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("q.difficulty")
+      .getRawMany();
 
     // Most active categories today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const todayForActivity = new Date();
+    todayForActivity.setHours(0, 0, 0, 0);
 
-    const categoryActivity = await this.prisma.testAttempt.groupBy({
-      by: ["categoryId"],
-      where: { completedAt: { gte: today }, categoryId: { not: null } },
-      _count: true,
-      orderBy: { _count: { categoryId: "desc" } },
-      take: 5,
-    });
+    const categoryActivity = await this.testAttemptRepository
+      .createQueryBuilder("t")
+      .where("t.completedAt >= :today", { today: todayForActivity })
+      .andWhere("t.categoryId IS NOT NULL")
+      .select("t.categoryId", "categoryId")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("t.categoryId")
+      .orderBy("count", "DESC")
+      .take(5)
+      .getRawMany();
 
     const categoryActivityWithNames = await Promise.all(
       categoryActivity.map(async (c) => {
-        const cat = await this.prisma.category.findUnique({
-          where: { id: c.categoryId! },
-          select: { name: true, slug: true },
+        const cat = await this.categoryRepository.findOne({
+          where: { id: c.categoryId },
+          select: ["name", "slug"],
         });
-        return { ...c, name: cat?.name, slug: cat?.slug };
-      })
+        return {
+          ...c,
+          _count: parseInt(c.count),
+          name: cat?.name,
+          slug: cat?.slug,
+        };
+      }),
     );
+
+    // ============ TOTAL XP EARNED ============
+    const totalXPEarnedResult = await this.userRepository
+      .createQueryBuilder("u")
+      .select("SUM(u.totalXP)", "sum")
+      .getRawOne();
+
+    // ============ CORRECT ANSWERS COUNT ============
+    const correctAnswers = await this.testAnswerRepository.count({
+      where: { isCorrect: true },
+    });
+    const todayCorrectAnswers = await this.testAnswerRepository.count({
+      where: { isCorrect: true, createdAt: MoreThanOrEqual(today) },
+    });
 
     return {
       ...basicStats,
@@ -646,25 +887,69 @@ export class AdminService {
       lowQuestionCategories,
       questionsByDifficulty: questionsByDifficulty.map((q) => ({
         difficulty: q.difficulty,
-        count: q._count,
+        count: parseInt(q.count),
       })),
       categoryActivityToday: categoryActivityWithNames,
+      // Zikr stats
+      zikr: {
+        total: totalZikrs,
+        active: activeZikrs,
+        completions: {
+          total: totalZikrCompletionsResult?.[0]?.total || 0,
+          today: todayZikrCompletionsResult?.[0]?.total || 0,
+          thisWeek: weekZikrCompletionsResult?.[0]?.total || 0,
+        },
+        totalXpEarned: parseInt(totalZikrXpEarnedResult?.sum) || 0,
+        topZikrs: topZikrs.map((z) => ({
+          id: z.z_id,
+          title: z.z_titleLatin,
+          emoji: z.z_emoji,
+          count: z.z_count,
+          xpReward: z.z_xpReward,
+          completions: parseInt(z.completionsCount) || 0,
+        })),
+        byDayOfWeek: zikrsByDay.map((d) => ({
+          dayOfWeek: d.dayOfWeek,
+          count: parseInt(d.count),
+        })),
+      },
+      // XP stats
+      xp: {
+        totalEarned: parseInt(totalXPEarnedResult?.sum) || 0,
+        fromZikrs: parseInt(totalZikrXpEarnedResult?.sum) || 0,
+      },
+      // Correct answers
+      correctAnswers: {
+        total: correctAnswers,
+        today: todayCorrectAnswers,
+      },
     };
   }
 
   // ==================== CATEGORY MANAGEMENT ====================
   async getAllCategoriesAdmin() {
-    return this.prisma.category.findMany({
-      orderBy: { order: "asc" },
-      include: {
-        _count: {
-          select: {
-            questions: true,
-            testAttempts: true,
-          },
-        },
-      },
+    const categories = await this.categoryRepository.find({
+      order: { order: "ASC" },
     });
+
+    // Get counts for each category
+    const categoriesWithCounts = await Promise.all(
+      categories.map(async (c) => {
+        const [questionsCount, testAttemptsCount] = await Promise.all([
+          this.questionRepository.count({ where: { categoryId: c.id } }),
+          this.testAttemptRepository.count({ where: { categoryId: c.id } }),
+        ]);
+        return {
+          ...c,
+          _count: {
+            questions: questionsCount,
+            testAttempts: testAttemptsCount,
+          },
+        };
+      }),
+    );
+
+    return categoriesWithCounts;
   }
 
   async createCategory(data: {
@@ -680,29 +965,30 @@ export class AdminService {
     difficultyLevels?: string[];
   }) {
     // Check if slug exists
-    const existing = await this.prisma.category.findUnique({
+    const existing = await this.categoryRepository.findOne({
       where: { slug: data.slug },
     });
     if (existing) {
       throw new BadRequestException("Bu slug allaqachon mavjud");
     }
 
-    const category = await this.prisma.category.create({ data });
+    const category = this.categoryRepository.create(data);
+    const savedCategory = await this.categoryRepository.save(category);
 
     // Notify all users about the new category (async, don't wait)
     this.notificationsService
       .notifyNewCategory({
-        id: category.id,
-        name: category.name,
-        slug: category.slug,
-        icon: category.icon,
-        group: category.group,
+        id: savedCategory.id,
+        name: savedCategory.name,
+        slug: savedCategory.slug,
+        icon: savedCategory.icon,
+        group: savedCategory.group,
       })
       .catch((err) => {
         console.error("Failed to send new category notifications:", err);
       });
 
-    return category;
+    return savedCategory;
   }
 
   async updateCategory(
@@ -718,34 +1004,32 @@ export class AdminService {
       order?: number;
       isActive?: boolean;
       difficultyLevels?: string[];
-    }
+    },
   ) {
-    const category = await this.prisma.category.findUnique({ where: { id } });
+    const category = await this.categoryRepository.findOne({ where: { id } });
     if (!category) {
       throw new NotFoundException("Kategoriya topilmadi");
     }
 
-    return this.prisma.category.update({ where: { id }, data });
+    Object.assign(category, data);
+    return this.categoryRepository.save(category);
   }
 
   async deleteCategory(id: string) {
-    const category = await this.prisma.category.findUnique({
-      where: { id },
-      include: { _count: { select: { questions: true } } },
-    });
+    const category = await this.categoryRepository.findOne({ where: { id } });
     if (!category) {
       throw new NotFoundException("Kategoriya topilmadi");
     }
 
     // Delete all questions first
-    await this.prisma.question.deleteMany({ where: { categoryId: id } });
+    await this.questionRepository.delete({ categoryId: id });
 
-    return this.prisma.category.delete({ where: { id } });
+    return this.categoryRepository.remove(category);
   }
 
   // Parse namuna.txt format and import questions
   async importQuestionsFromText(categoryId: string, text: string) {
-    const category = await this.prisma.category.findUnique({
+    const category = await this.categoryRepository.findOne({
       where: { id: categoryId },
     });
     if (!category) {
@@ -759,16 +1043,16 @@ export class AdminService {
     }
 
     // Check for duplicates
-    const existingQuestions = await this.prisma.question.findMany({
+    const existingQuestions = await this.questionRepository.find({
       where: { categoryId },
-      select: { question: true },
+      select: ["question"],
     });
     const existingSet = new Set(
-      existingQuestions.map((q) => q.question.toLowerCase().trim())
+      existingQuestions.map((q) => q.question.toLowerCase().trim()),
     );
 
     const newQuestions = questions.filter(
-      (q) => !existingSet.has(q.question.toLowerCase().trim())
+      (q) => !existingSet.has(q.question.toLowerCase().trim()),
     );
 
     if (newQuestions.length === 0) {
@@ -781,8 +1065,8 @@ export class AdminService {
 
     const xpMap = { EASY: 5, MEDIUM: 10, HARD: 15 };
 
-    const created = await this.prisma.question.createMany({
-      data: newQuestions.map((q) => ({
+    const questionsToCreate = newQuestions.map((q) =>
+      this.questionRepository.create({
         categoryId,
         question: q.question,
         options: q.options,
@@ -790,11 +1074,13 @@ export class AdminService {
         // difficulty: q.difficulty as Difficulty,
         xpReward: xpMap[q.difficulty],
         isActive: true,
-      })),
-    });
+      }),
+    );
+
+    const created = await this.questionRepository.save(questionsToCreate);
 
     return {
-      imported: created.count,
+      imported: created.length,
       skipped: questions.length - newQuestions.length,
       total: questions.length,
     };
@@ -814,7 +1100,7 @@ export class AdminService {
 
     if (questions.length < 300) {
       throw new BadRequestException(
-        `Kamida 300 ta savol kerak. Hozir: ${questions.length} ta`
+        `Kamida 300 ta savol kerak. Hozir: ${questions.length} ta`,
       );
     }
 
@@ -822,7 +1108,7 @@ export class AdminService {
     const difficulties = new Set(questions.map((q) => q.difficulty));
     if (difficulties.size < 3) {
       throw new BadRequestException(
-        "Savollar 3 ta darajada (EASY, MEDIUM, HARD) bo'lishi kerak"
+        "Savollar 3 ta darajada (EASY, MEDIUM, HARD) bo'lishi kerak",
       );
     }
 
@@ -834,7 +1120,7 @@ export class AdminService {
     }
 
     // Check if slug exists
-    const existing = await this.prisma.category.findUnique({
+    const existing = await this.categoryRepository.findOne({
       where: { slug: data.slug },
     });
     if (existing) {
@@ -844,36 +1130,46 @@ export class AdminService {
     // Create category and questions in transaction
     const xpMap = { EASY: 5, MEDIUM: 10, HARD: 15 };
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const category = await tx.category.create({
-        data: {
-          name: data.name,
-          slug: data.slug,
-          description: data.description,
-          icon: data.icon,
-          color: data.color,
-        },
-      });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-      await tx.question.createMany({
-        data: questions.map((q) => ({
-          categoryId: category.id,
+    try {
+      const category = queryRunner.manager.create(Category, {
+        name: data.name,
+        slug: data.slug,
+        description: data.description,
+        icon: data.icon,
+        color: data.color,
+      });
+      const savedCategory = await queryRunner.manager.save(category);
+
+      const questionsToCreate = questions.map((q) =>
+        queryRunner.manager.create(Question, {
+          categoryId: savedCategory.id,
           question: q.question,
           options: q.options,
           correctAnswer: q.correctAnswer,
           // difficulty: q.difficulty as Difficulty,
           xpReward: xpMap[q.difficulty],
           isActive: true,
-        })),
-      });
+        }),
+      );
 
-      return category;
-    });
+      await queryRunner.manager.save(questionsToCreate);
 
-    return {
-      category: result,
-      questionsImported: questions.length,
-    };
+      await queryRunner.commitTransaction();
+
+      return {
+        category: savedCategory,
+        questionsImported: questions.length,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   // Parse questions from namuna.txt format
@@ -987,20 +1283,19 @@ export class AdminService {
 
   // ==================== DESIGN SETTINGS ====================
   async getDesignSettings() {
-    let settings = await this.prisma.designSetting.findFirst({
+    let settings = await this.designSettingRepository.findOne({
       where: { isActive: true },
     });
 
     if (!settings) {
       // Create default settings
-      settings = await this.prisma.designSetting.create({
-        data: {
-          theme: "default",
-          videoLoop: true,
-          videoMuted: true,
-          isActive: true,
-        },
+      settings = this.designSettingRepository.create({
+        theme: "default",
+        videoLoop: true,
+        videoMuted: true,
+        isActive: true,
       });
+      await this.designSettingRepository.save(settings);
     }
 
     return settings;
@@ -1015,43 +1310,36 @@ export class AdminService {
     videoLoop?: boolean;
     videoMuted?: boolean;
   }) {
-    let settings = await this.prisma.designSetting.findFirst({
+    let settings = await this.designSettingRepository.findOne({
       where: { isActive: true },
     });
 
     if (!settings) {
-      return this.prisma.designSetting.create({
-        data: {
-          ...data,
-          isActive: true,
-        },
+      const newSettings = this.designSettingRepository.create({
+        ...data,
+        isActive: true,
       });
+      return this.designSettingRepository.save(newSettings);
     }
 
-    return this.prisma.designSetting.update({
-      where: { id: settings.id },
-      data,
-    });
+    Object.assign(settings, data);
+    return this.designSettingRepository.save(settings);
   }
 
   async resetDesignToDefault() {
-    const settings = await this.prisma.designSetting.findFirst({
+    const settings = await this.designSettingRepository.findOne({
       where: { isActive: true },
     });
 
     if (settings) {
-      return this.prisma.designSetting.update({
-        where: { id: settings.id },
-        data: {
-          theme: "default",
-          lightVideoUrl: null,
-          darkVideoUrl: null,
-          lightImageUrl: null,
-          darkImageUrl: null,
-          videoLoop: true,
-          videoMuted: true,
-        },
-      });
+      settings.theme = "default";
+      settings.lightVideoUrl = null;
+      settings.darkVideoUrl = null;
+      settings.lightImageUrl = null;
+      settings.darkImageUrl = null;
+      settings.videoLoop = true;
+      settings.videoMuted = true;
+      return this.designSettingRepository.save(settings);
     }
 
     return this.getDesignSettings();
@@ -1097,9 +1385,9 @@ export class AdminService {
     });
 
     // Get admin info for notification
-    const admin = await this.prisma.user.findUnique({
+    const admin = await this.userRepository.findOne({
       where: { id: adminId },
-      select: { id: true, username: true, avatar: true, fullName: true },
+      select: ["id", "username", "avatar", "fullName"],
     });
 
     // Get target users
@@ -1111,33 +1399,44 @@ export class AdminService {
     }> = [];
 
     if (targetType === "all") {
-      users = await this.prisma.user.findMany({
+      users = await this.userRepository.find({
         where: { isActive: true },
-        select: { id: true, email: true, telegramId: true, fullName: true },
+        select: ["id", "email", "telegramId", "fullName"],
       });
     } else if (targetType === "selected" && targetIds) {
-      users = await this.prisma.user.findMany({
-        where: { id: { in: targetIds }, isActive: true },
-        select: { id: true, email: true, telegramId: true, fullName: true },
+      users = await this.userRepository.find({
+        where: { id: In(targetIds), isActive: true },
+        select: ["id", "email", "telegramId", "fullName"],
       });
     } else if (targetType === "filter" && filter) {
-      const where: any = { isActive: true };
+      const queryBuilder = this.userRepository
+        .createQueryBuilder("user")
+        .select(["user.id", "user.email", "user.telegramId", "user.fullName"])
+        .where("user.isActive = :isActive", { isActive: true });
 
-      if (filter.minLevel) where.level = { gte: filter.minLevel };
-      if (filter.maxLevel)
-        where.level = { ...where.level, lte: filter.maxLevel };
-      if (filter.minXP) where.totalXP = { gte: filter.minXP };
+      if (filter.minLevel) {
+        queryBuilder.andWhere("user.level >= :minLevel", {
+          minLevel: filter.minLevel,
+        });
+      }
+      if (filter.maxLevel) {
+        queryBuilder.andWhere("user.level <= :maxLevel", {
+          maxLevel: filter.maxLevel,
+        });
+      }
+      if (filter.minXP) {
+        queryBuilder.andWhere("user.totalXP >= :minXP", {
+          minXP: filter.minXP,
+        });
+      }
 
       if (filter.inactiveDays) {
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - filter.inactiveDays);
-        where.lastActiveAt = { lt: cutoff };
+        queryBuilder.andWhere("user.lastActiveAt < :cutoff", { cutoff });
       }
 
-      users = await this.prisma.user.findMany({
-        where,
-        select: { id: true, email: true, telegramId: true, fullName: true },
-      });
+      users = await queryBuilder.getMany();
     }
 
     if (users.length === 0) {
@@ -1147,7 +1446,7 @@ export class AdminService {
     // Limit to 15 users for selected
     if (targetType === "selected" && users.length > 15) {
       throw new BadRequestException(
-        "Bir vaqtda 15 tadan ko'p foydalanuvchiga xabar yuborib bo'lmaydi"
+        "Bir vaqtda 15 tadan ko'p foydalanuvchiga xabar yuborib bo'lmaydi",
       );
     }
 
@@ -1173,7 +1472,7 @@ export class AdminService {
 
           console.log(
             "[sendMultiChannelMessage] Creating notification with data:",
-            notificationData
+            notificationData,
           );
 
           await this.notificationsService.createNotification(user.id, {
@@ -1195,7 +1494,7 @@ export class AdminService {
             "[Admin] Sending email with imageUrl:",
             imageUrl,
             "videoUrl:",
-            videoUrl
+            videoUrl,
           );
           await this.mailService.sendAdminMessage(
             user.email,
@@ -1203,7 +1502,7 @@ export class AdminService {
             message,
             admin?.fullName || admin?.username,
             imageUrl,
-            videoUrl
+            videoUrl,
           );
           emailSent++;
         } catch (error) {
@@ -1217,7 +1516,7 @@ export class AdminService {
           let telegramMessage = `*${title}*\n\n${message}`;
           await this.telegramService.sendMessage(
             parseInt(user.telegramId),
-            telegramMessage
+            telegramMessage,
           );
           telegramSent++;
         } catch (error) {
@@ -1227,22 +1526,21 @@ export class AdminService {
     }
 
     // Save message record
-    const adminMessage = await this.prisma.adminMessage.create({
-      data: {
-        adminId,
-        title,
-        message,
-        imageUrl,
-        videoUrl,
-        targetType,
-        targetIds: users.map((u) => u.id),
-        channels,
-        sentAt: new Date(),
-        emailSent,
-        telegramSent,
-        notifSent,
-      },
+    const adminMessage = this.adminMessageRepository.create({
+      adminId,
+      title,
+      message,
+      imageUrl,
+      videoUrl,
+      targetType,
+      targetIds: users.map((u) => u.id),
+      channels,
+      sentAt: new Date(),
+      emailSent,
+      telegramSent,
+      notifSent,
     });
+    await this.adminMessageRepository.save(adminMessage);
 
     return {
       messageId: adminMessage.id,

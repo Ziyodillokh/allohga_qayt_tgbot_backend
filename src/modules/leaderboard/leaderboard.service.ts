@@ -1,29 +1,47 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
+import { Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, MoreThan } from "typeorm";
+import { User } from "../users/entities";
+import { CategoryStat } from "../categories/entities";
+import { WeeklyXP, MonthlyXP } from "./entities";
 
 @Injectable()
 export class LeaderboardService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(CategoryStat)
+    private categoryStatRepository: Repository<CategoryStat>,
+    @InjectRepository(WeeklyXP)
+    private weeklyXPRepository: Repository<WeeklyXP>,
+    @InjectRepository(MonthlyXP)
+    private monthlyXPRepository: Repository<MonthlyXP>,
+  ) {}
 
   async getGlobalLeaderboard(limit = 100, userId?: string) {
-    const users = await this.prisma.user.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        username: true,
-        fullName: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        _count: {
-          select: { testAttempts: { where: { completedAt: { not: null } } } },
-        },
-      },
-      orderBy: { totalXP: 'desc' },
-      take: limit,
-    });
+    const users = await this.userRepository
+      .createQueryBuilder("user")
+      .leftJoin(
+        "user.testAttempts",
+        "testAttempt",
+        "testAttempt.completedAt IS NOT NULL",
+      )
+      .select([
+        "user.id",
+        "user.username",
+        "user.fullName",
+        "user.avatar",
+        "user.totalXP",
+        "user.level",
+      ])
+      .addSelect("COUNT(testAttempt.id)", "testsCount")
+      .where("user.isActive = :isActive", { isActive: true })
+      .groupBy("user.id")
+      .orderBy("user.totalXP", "DESC")
+      .limit(limit)
+      .getRawAndEntities();
 
-    const leaderboard = users.map((user, index) => ({
+    const leaderboard = users.entities.map((user, index) => ({
       rank: index + 1,
       id: user.id,
       username: user.username,
@@ -31,7 +49,7 @@ export class LeaderboardService {
       avatar: user.avatar,
       totalXP: user.totalXP,
       level: user.level,
-      testsCount: user._count.testAttempts,
+      testsCount: parseInt(users.raw[index]?.testsCount || "0", 10),
     }));
 
     // Get current user's rank if provided
@@ -46,21 +64,15 @@ export class LeaderboardService {
     };
   }
 
-  async getCategoryLeaderboard(categoryId: string, limit = 50, userId?: string) {
-    const stats = await this.prisma.categoryStat.findMany({
+  async getCategoryLeaderboard(
+    categoryId: string,
+    limit = 50,
+    userId?: string,
+  ) {
+    const stats = await this.categoryStatRepository.find({
       where: { categoryId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            fullName: true,
-            avatar: true,
-            level: true,
-          },
-        },
-      },
-      orderBy: { totalXP: 'desc' },
+      relations: ["user"],
+      order: { totalXP: "DESC" },
       take: limit,
     });
 
@@ -92,20 +104,10 @@ export class LeaderboardService {
   async getWeeklyLeaderboard(limit = 100, userId?: string) {
     const weekStart = this.getWeekStart(new Date());
 
-    const weeklyStats = await this.prisma.weeklyXP.findMany({
+    const weeklyStats = await this.weeklyXPRepository.find({
       where: { weekStart },
-      include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            fullName: true,
-            avatar: true,
-            level: true,
-          },
-        },
-      },
-      orderBy: { xp: 'desc' },
+      relations: ["user"],
+      order: { xp: "DESC" },
       take: limit,
     });
 
@@ -135,20 +137,10 @@ export class LeaderboardService {
   async getMonthlyLeaderboard(limit = 100, userId?: string) {
     const monthStart = this.getMonthStart(new Date());
 
-    const monthlyStats = await this.prisma.monthlyXP.findMany({
+    const monthlyStats = await this.monthlyXPRepository.find({
       where: { monthStart },
-      include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            fullName: true,
-            avatar: true,
-            level: true,
-          },
-        },
-      },
-      orderBy: { xp: 'desc' },
+      relations: ["user"],
+      order: { xp: "DESC" },
       take: limit,
     });
 
@@ -176,17 +168,17 @@ export class LeaderboardService {
   }
 
   async getUserGlobalRank(userId: string) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: { totalXP: true },
+      select: ["totalXP"],
     });
 
     if (!user) return null;
 
-    const rank = await this.prisma.user.count({
+    const rank = await this.userRepository.count({
       where: {
         isActive: true,
-        totalXP: { gt: user.totalXP },
+        totalXP: MoreThan(user.totalXP),
       },
     });
 
@@ -194,16 +186,16 @@ export class LeaderboardService {
   }
 
   async getUserCategoryRank(userId: string, categoryId: string) {
-    const stat = await this.prisma.categoryStat.findUnique({
-      where: { userId_categoryId: { userId, categoryId } },
+    const stat = await this.categoryStatRepository.findOne({
+      where: { userId, categoryId },
     });
 
     if (!stat) return null;
 
-    const rank = await this.prisma.categoryStat.count({
+    const rank = await this.categoryStatRepository.count({
       where: {
         categoryId,
-        totalXP: { gt: stat.totalXP },
+        totalXP: MoreThan(stat.totalXP),
       },
     });
 
@@ -213,16 +205,16 @@ export class LeaderboardService {
   async getUserWeeklyRank(userId: string) {
     const weekStart = this.getWeekStart(new Date());
 
-    const stat = await this.prisma.weeklyXP.findUnique({
-      where: { userId_weekStart: { userId, weekStart } },
+    const stat = await this.weeklyXPRepository.findOne({
+      where: { userId, weekStart },
     });
 
     if (!stat) return null;
 
-    const rank = await this.prisma.weeklyXP.count({
+    const rank = await this.weeklyXPRepository.count({
       where: {
         weekStart,
-        xp: { gt: stat.xp },
+        xp: MoreThan(stat.xp),
       },
     });
 
@@ -232,16 +224,16 @@ export class LeaderboardService {
   async getUserMonthlyRank(userId: string) {
     const monthStart = this.getMonthStart(new Date());
 
-    const stat = await this.prisma.monthlyXP.findUnique({
-      where: { userId_monthStart: { userId, monthStart } },
+    const stat = await this.monthlyXPRepository.findOne({
+      where: { userId, monthStart },
     });
 
     if (!stat) return null;
 
-    const rank = await this.prisma.monthlyXP.count({
+    const rank = await this.monthlyXPRepository.count({
       where: {
         monthStart,
-        xp: { gt: stat.xp },
+        xp: MoreThan(stat.xp),
       },
     });
 

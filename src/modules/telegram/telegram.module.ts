@@ -1,14 +1,15 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { ConfigModule, ConfigService } from "@nestjs/config";
+import { TypeOrmModule } from "@nestjs/typeorm";
 import { TelegramController } from "./telegram.controller";
 import { TelegramService } from "./telegram.service";
-import { PrismaModule } from "../../prisma/prisma.module";
+import { User } from "../users/entities";
 import { UploadModule } from "../upload/upload.module";
 
 @Module({
   imports: [
-    PrismaModule,
+    TypeOrmModule.forFeature([User]),
     forwardRef(() => UploadModule),
     JwtModule.registerAsync({
       imports: [ConfigModule],

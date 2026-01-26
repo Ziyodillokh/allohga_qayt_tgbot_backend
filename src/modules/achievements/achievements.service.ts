@@ -1,6 +1,12 @@
 import { Injectable, Inject, forwardRef } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, Not, IsNull, MoreThan } from "typeorm";
 import { NotificationsService } from "../notifications/notifications.service";
+import { Achievement, UserAchievement } from "./entities";
+import { User } from "../users/entities";
+import { TestAttempt } from "../tests/entities";
+import { AIChat } from "../ai/entities";
+import { NotificationType } from "../notifications/entities/notification.entity";
 
 interface AchievementCondition {
   type:
@@ -23,49 +29,28 @@ interface AchievementCondition {
 @Injectable()
 export class AchievementsService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(Achievement)
+    private achievementRepository: Repository<Achievement>,
+    @InjectRepository(UserAchievement)
+    private userAchievementRepository: Repository<UserAchievement>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(TestAttempt)
+    private testAttemptRepository: Repository<TestAttempt>,
+    @InjectRepository(AIChat)
+    private aiChatRepository: Repository<AIChat>,
     @Inject(forwardRef(() => NotificationsService))
-    private notificationsService: NotificationsService
+    private notificationsService: NotificationsService,
   ) {}
 
-  // async getAllAchievements(userId?: string) {
-  //   const achievements = await this.prisma.achievement.findMany({
-  //     where: { isActive: true },
-  //     orderBy: { order: "asc" },
-  //   });
-
-  //   if (!userId) {
-  //     return achievements;
-  //   }
-
-  //   // Get user's achievement progress
-  //   const userAchievements = await this.prisma.userAchievement.findMany({
-  //     where: { userId },
-  //   });
-
-  //   const achievementMap = new Map(
-  //     userAchievements.map((ua) => [ua.achievementId, ua])
-  //   );
-
-  //   return achievements.map((achievement) => {
-  //     const userAchievement = achievementMap.get(achievement.id);
-  //     return {
-  //       ...achievement,
-  //       progress: userAchievement?.progress || 0,
-  //       unlocked: !!userAchievement?.unlockedAt,
-  //       unlockedAt: userAchievement?.unlockedAt,
-  //     };
-  //   });
-  // }
-
   async getUserAchievements(userId: string) {
-    const userAchievements = await this.prisma.userAchievement.findMany({
+    const userAchievements = await this.userAchievementRepository.find({
       where: { userId },
-      include: { achievement: true },
-      orderBy: [
-        { unlockedAt: { sort: "desc", nulls: "last" } },
-        { progress: "desc" },
-      ],
+      relations: ["achievement"],
+      order: {
+        unlockedAt: { direction: "DESC", nulls: "LAST" },
+        progress: "DESC",
+      },
     });
 
     const unlocked = userAchievements.filter((ua) => ua.unlockedAt);
@@ -79,26 +64,27 @@ export class AchievementsService {
   }
 
   async checkAchievements(userId: string) {
-    const achievements = await this.prisma.achievement.findMany({
+    const achievements = await this.achievementRepository.find({
       where: { isActive: true },
     });
 
-    const user = await this.prisma.user.findUnique({
+    const user = await this.userRepository.findOne({
       where: { id: userId },
-      include: {
-        _count: {
-          select: {
-            testAttempts: { where: { completedAt: { not: null } } },
-            aiChats: true,
-          },
-        },
-      },
     });
 
     if (!user) return [];
 
+    // Get counts
+    const testAttemptsCount = await this.testAttemptRepository.count({
+      where: { userId, completedAt: Not(IsNull()) },
+    });
+
+    const aiChatsCount = await this.aiChatRepository.count({
+      where: { userId },
+    });
+
     // Get additional stats
-    const perfectTests = await this.prisma.testAttempt.count({
+    const perfectTests = await this.testAttemptRepository.count({
       where: { userId, score: 100 },
     });
 
@@ -108,10 +94,8 @@ export class AchievementsService {
       const condition = achievement.condition as any as AchievementCondition;
 
       // Check if already unlocked
-      const existing = await this.prisma.userAchievement.findUnique({
-        where: {
-          userId_achievementId: { userId, achievementId: achievement.id },
-        },
+      const existing = await this.userAchievementRepository.findOne({
+        where: { userId, achievementId: achievement.id },
       });
 
       if (existing?.unlockedAt) continue;
@@ -127,8 +111,8 @@ export class AchievementsService {
           break;
 
         case "tests":
-          progress = user._count.testAttempts;
-          completed = user._count.testAttempts >= condition.value;
+          progress = testAttemptsCount;
+          completed = testAttemptsCount >= condition.value;
           break;
 
         case "perfect_tests":
@@ -144,15 +128,15 @@ export class AchievementsService {
 
         case "ai_chats":
         case "ai":
-          progress = user._count.aiChats;
-          completed = user._count.aiChats >= condition.value;
+          progress = aiChatsCount;
+          completed = aiChatsCount >= condition.value;
           break;
 
         case "ranking":
         case "rank":
           // Get user's current rank
-          const usersAbove = await this.prisma.user.count({
-            where: { totalXP: { gt: user.totalXP } },
+          const usersAbove = await this.userRepository.count({
+            where: { totalXP: MoreThan(user.totalXP) },
           });
           const currentRank = usersAbove + 1;
           progress = currentRank;
@@ -162,25 +146,28 @@ export class AchievementsService {
         case "category_tests":
         case "category":
           if (condition.categoryId) {
-            const categoryTests = await this.prisma.testAttempt.count({
+            const categoryTests = await this.testAttemptRepository.count({
               where: {
                 userId,
                 categoryId: condition.categoryId,
-                completedAt: { not: null },
+                completedAt: Not(IsNull()),
               },
             });
             progress = categoryTests;
             completed = categoryTests >= condition.value;
           } else {
-            // Any category with enough tests
-            const categoryGroups = await this.prisma.testAttempt.groupBy({
-              by: ["categoryId"],
-              where: { userId, completedAt: { not: null } },
-              _count: true,
-            });
+            // Any category with enough tests - use raw query for groupBy
+            const categoryGroups = await this.testAttemptRepository
+              .createQueryBuilder("ta")
+              .select("ta.categoryId", "categoryId")
+              .addSelect("COUNT(*)", "count")
+              .where("ta.userId = :userId", { userId })
+              .andWhere("ta.completedAt IS NOT NULL")
+              .groupBy("ta.categoryId")
+              .getRawMany();
             const maxCategoryTests = Math.max(
-              ...categoryGroups.map((g) => g._count),
-              0
+              ...categoryGroups.map((g) => parseInt(g.count)),
+              0,
             );
             progress = maxCategoryTests;
             completed = maxCategoryTests >= condition.value;
@@ -189,10 +176,13 @@ export class AchievementsService {
 
         case "categories":
           // Count unique categories where user has completed tests
-          const uniqueCategories = await this.prisma.testAttempt.groupBy({
-            by: ["categoryId"],
-            where: { userId, completedAt: { not: null } },
-          });
+          const uniqueCategories = await this.testAttemptRepository
+            .createQueryBuilder("ta")
+            .select("ta.categoryId", "categoryId")
+            .where("ta.userId = :userId", { userId })
+            .andWhere("ta.completedAt IS NOT NULL")
+            .groupBy("ta.categoryId")
+            .getRawMany();
           progress = uniqueCategories.length;
           completed = uniqueCategories.length >= condition.value;
           break;
@@ -200,39 +190,39 @@ export class AchievementsService {
 
       // Update or create user achievement
       if (existing) {
-        await this.prisma.userAchievement.update({
-          where: { id: existing.id },
-          data: {
+        await this.userAchievementRepository.update(
+          { id: existing.id },
+          {
             progress,
             unlockedAt: completed ? new Date() : null,
           },
-        });
+        );
       } else {
-        await this.prisma.userAchievement.create({
-          data: {
-            userId,
-            achievementId: achievement.id,
-            progress,
-            unlockedAt: completed ? new Date() : null,
-          },
+        const newUserAchievement = this.userAchievementRepository.create({
+          userId,
+          achievementId: achievement.id,
+          progress,
+          unlockedAt: completed ? new Date() : null,
         });
+        await this.userAchievementRepository.save(newUserAchievement);
       }
 
       // If newly completed, add XP and notify
       if (completed && !existing?.unlockedAt) {
         // Add achievement XP
         if (achievement.xpReward > 0) {
-          await this.prisma.user.update({
-            where: { id: userId },
-            data: { totalXP: { increment: achievement.xpReward } },
-          });
+          await this.userRepository.increment(
+            { id: userId },
+            "totalXP",
+            achievement.xpReward,
+          );
         }
 
         // Send notification
         await this.notificationsService.createNotification(userId, {
           title: "Yangi yutuq! 🏆",
           message: `Siz "${achievement.name}" yutuqiga erishdingiz! +${achievement.xpReward} XP`,
-          type: "ACHIEVEMENT",
+          type: NotificationType.ACHIEVEMENT,
           data: { achievementId: achievement.id },
         });
 

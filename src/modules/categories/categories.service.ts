@@ -3,61 +3,76 @@ import {
   NotFoundException,
   ConflictException,
 } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, Not } from "typeorm";
+import { Category } from "./entities";
+import { Question } from "../questions/entities";
+import { TestAttempt } from "../tests/entities";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { UpdateCategoryDto } from "./dto/update-category.dto";
 
 @Injectable()
 export class CategoriesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
+    @InjectRepository(Question)
+    private questionRepository: Repository<Question>,
+    @InjectRepository(TestAttempt)
+    private testAttemptRepository: Repository<TestAttempt>,
+  ) {}
 
   async findAll(activeOnly = true) {
     const where = activeOnly ? { isActive: true } : {};
 
-    const categories = await this.prisma.category.findMany({
+    const categories = await this.categoryRepository.find({
       where,
-      orderBy: { order: "asc" },
-      include: {
-        _count: {
-          select: {
-            questions: { where: { isActive: true } },
-          },
-        },
-      },
+      order: { order: "ASC" },
     });
 
-    return categories.map((cat) => ({
-      ...cat,
-      questionsCount: cat._count.questions,
-    }));
+    // Get question counts for each category
+    const categoriesWithCounts = await Promise.all(
+      categories.map(async (cat) => {
+        const questionsCount = await this.questionRepository.count({
+          where: { categoryId: cat.id, isActive: true },
+        });
+        return {
+          ...cat,
+          questionsCount,
+        };
+      }),
+    );
+
+    return categoriesWithCounts;
   }
 
   async findBySlug(slug: string) {
-    const category = await this.prisma.category.findUnique({
+    const category = await this.categoryRepository.findOne({
       where: { slug },
-      include: {
-        _count: {
-          select: {
-            questions: { where: { isActive: true } },
-            testAttempts: true,
-          },
-        },
-      },
     });
 
     if (!category) {
       throw new NotFoundException("Kategoriya topilmadi");
     }
 
+    const [questionsCount, testsCount] = await Promise.all([
+      this.questionRepository.count({
+        where: { categoryId: category.id, isActive: true },
+      }),
+      this.testAttemptRepository.count({
+        where: { categoryId: category.id },
+      }),
+    ]);
+
     return {
       ...category,
-      questionsCount: category._count.questions,
-      testsCount: category._count.testAttempts,
+      questionsCount,
+      testsCount,
     };
   }
 
   async findById(id: string) {
-    const category = await this.prisma.category.findUnique({
+    const category = await this.categoryRepository.findOne({
       where: { id },
     });
 
@@ -70,7 +85,7 @@ export class CategoriesService {
 
   async create(dto: CreateCategoryDto) {
     // Check if slug already exists
-    const existing = await this.prisma.category.findUnique({
+    const existing = await this.categoryRepository.findOne({
       where: { slug: dto.slug },
     });
 
@@ -78,9 +93,8 @@ export class CategoriesService {
       throw new ConflictException("Bu slug allaqachon mavjud");
     }
 
-    return this.prisma.category.create({
-      data: dto,
-    });
+    const category = this.categoryRepository.create(dto);
+    return this.categoryRepository.save(category);
   }
 
   async update(id: string, dto: UpdateCategoryDto) {
@@ -88,10 +102,10 @@ export class CategoriesService {
 
     // Check if new slug conflicts
     if (dto.slug) {
-      const existing = await this.prisma.category.findFirst({
+      const existing = await this.categoryRepository.findOne({
         where: {
           slug: dto.slug,
-          NOT: { id },
+          id: Not(id),
         },
       });
 
@@ -100,29 +114,25 @@ export class CategoriesService {
       }
     }
 
-    return this.prisma.category.update({
-      where: { id },
-      data: dto,
-    });
+    await this.categoryRepository.update(id, dto);
+    return this.findById(id);
   }
 
   async delete(id: string) {
     const category = await this.findById(id);
 
     // Check if category has questions
-    const questionsCount = await this.prisma.question.count({
+    const questionsCount = await this.questionRepository.count({
       where: { categoryId: id },
     });
 
     if (questionsCount > 0) {
       throw new ConflictException(
-        `Bu kategoriyada ${questionsCount} ta savol mavjud. Avval savollarni o'chiring yoki boshqa kategoriyaga ko'chiring.`
+        `Bu kategoriyada ${questionsCount} ta savol mavjud. Avval savollarni o'chiring yoki boshqa kategoriyaga ko'chiring.`,
       );
     }
 
-    await this.prisma.category.delete({
-      where: { id },
-    });
+    await this.categoryRepository.delete(id);
 
     return { message: "Kategoriya o'chirildi" };
   }
@@ -130,32 +140,36 @@ export class CategoriesService {
   async getStats(id: string) {
     const category = await this.findById(id);
 
-    const [questionsCount, testsCount, avgScore] = await Promise.all([
-      this.prisma.question.count({
+    const [questionsCount, testsCount, avgScoreResult] = await Promise.all([
+      this.questionRepository.count({
         where: { categoryId: id, isActive: true },
       }),
-      this.prisma.testAttempt.count({
+      this.testAttemptRepository.count({
         where: { categoryId: id },
       }),
-      this.prisma.testAttempt.aggregate({
-        where: { categoryId: id },
-        _avg: { score: true },
-      }),
+      this.testAttemptRepository
+        .createQueryBuilder("testAttempt")
+        .where("testAttempt.categoryId = :id", { id })
+        .select("AVG(testAttempt.score)", "avgScore")
+        .getRawOne(),
     ]);
 
     // Questions by difficulty
-    const questionsByDifficulty = await this.prisma.question.groupBy({
-      by: ["difficulty"],
-      where: { categoryId: id, isActive: true },
-      _count: true,
-    });
+    const questionsByDifficulty = await this.questionRepository
+      .createQueryBuilder("question")
+      .where("question.categoryId = :id", { id })
+      .andWhere("question.isActive = :isActive", { isActive: true })
+      .select("question.difficulty", "difficulty")
+      .addSelect("COUNT(*)", "_count")
+      .groupBy("question.difficulty")
+      .getRawMany();
 
     return {
       category,
       stats: {
         questionsCount,
         testsCount,
-        averageScore: avgScore._avg.score || 0,
+        averageScore: avgScoreResult?.avgScore || 0,
         questionsByDifficulty,
       },
     };

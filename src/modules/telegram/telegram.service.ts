@@ -6,9 +6,11 @@ import {
   forwardRef,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { PrismaService } from "../../prisma/prisma.service";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 import { JwtService } from "@nestjs/jwt";
 import { UploadService } from "../upload/upload.service";
+import { User } from "../users/entities";
 import * as crypto from "crypto";
 
 interface TelegramInitData {
@@ -41,11 +43,12 @@ export class TelegramService {
   private botToken: string;
 
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private jwtService: JwtService,
     private configService: ConfigService,
     @Inject(forwardRef(() => UploadService))
-    private uploadService: UploadService
+    private uploadService: UploadService,
   ) {
     this.botToken = this.configService.get<string>("TELEGRAM_BOT_TOKEN") || "";
   }
@@ -129,7 +132,7 @@ export class TelegramService {
     const telegramUser = validated.user;
 
     // Find or create user
-    let user = await this.prisma.user.findUnique({
+    let user = await this.userRepository.findOne({
       where: { telegramId: telegramUser.id.toString() },
     });
 
@@ -138,7 +141,7 @@ export class TelegramService {
       if (!this.botToken) return undefined;
       try {
         const photosRes = await fetch(
-          `https://api.telegram.org/bot${this.botToken}/getUserProfilePhotos?user_id=${telegramUser.id}&limit=1`
+          `https://api.telegram.org/bot${this.botToken}/getUserProfilePhotos?user_id=${telegramUser.id}&limit=1`,
         );
         const photosJson = await photosRes.json();
         if (
@@ -150,7 +153,7 @@ export class TelegramService {
         const photoSizes = photosJson.result.photos[0];
         const fileId = photoSizes[photoSizes.length - 1].file_id;
         const fileRes = await fetch(
-          `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${fileId}`
+          `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${fileId}`,
         );
         const fileJson = await fileRes.json();
         if (!fileJson.ok || !fileJson.result) return undefined;
@@ -166,7 +169,7 @@ export class TelegramService {
     if (!user) {
       // Generate unique username
       let username = telegramUser.username || `user_${telegramUser.id}`;
-      const existingUsername = await this.prisma.user.findUnique({
+      const existingUsername = await this.userRepository.findOne({
         where: { username },
       });
 
@@ -178,30 +181,25 @@ export class TelegramService {
         .filter(Boolean)
         .join(" ");
 
-      user = await this.prisma.user.create({
-        data: {
-          telegramId: telegramUser.id.toString(),
-          username,
-          telegramUsername: telegramUser.username || null,
-          fullName: fullName || username,
-          avatar: latestAvatar || telegramUser.photo_url || null,
-          email: `${telegramUser.id}@telegram.allohgaqayting.uz`,
-          password: null,
-        },
+      user = this.userRepository.create({
+        telegramId: telegramUser.id.toString(),
+        username,
+        telegramUsername: telegramUser.username || null,
+        fullName: fullName || username,
+        avatar: latestAvatar || telegramUser.photo_url || null,
+        email: `${telegramUser.id}@telegram.allohgaqayting.uz`,
+        password: null,
       });
+      user = await this.userRepository.save(user);
     } else {
       const fullName = [telegramUser.first_name, telegramUser.last_name]
         .filter(Boolean)
         .join(" ");
 
-      user = await this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          fullName: fullName || user.fullName,
-          telegramUsername: telegramUser.username || user.telegramUsername,
-          avatar: latestAvatar || telegramUser.photo_url || user.avatar,
-        },
-      });
+      user.fullName = fullName || user.fullName;
+      user.telegramUsername = telegramUser.username || user.telegramUsername;
+      user.avatar = latestAvatar || telegramUser.photo_url || user.avatar;
+      user = await this.userRepository.save(user);
     }
 
     // Generate JWT
@@ -238,22 +236,30 @@ export class TelegramService {
    * Save phone number from Telegram contact sharing
    */
   async savePhoneNumber(userId: string, phone: string) {
-    const user = await this.prisma.user.update({
+    const user = await this.userRepository.findOne({
       where: { id: userId },
-      data: { telegramPhone: phone },
-      select: {
-        id: true,
-        username: true,
-        fullName: true,
-        telegramPhone: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        role: true,
-      },
     });
 
-    return { success: true, user };
+    if (!user) {
+      throw new BadRequestException("User not found");
+    }
+
+    user.telegramPhone = phone;
+    const updatedUser = await this.userRepository.save(user);
+
+    return {
+      success: true,
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        fullName: updatedUser.fullName,
+        telegramPhone: updatedUser.telegramPhone,
+        avatar: updatedUser.avatar,
+        totalXP: updatedUser.totalXP,
+        level: updatedUser.level,
+        role: updatedUser.role,
+      },
+    };
   }
 
   /**
@@ -261,28 +267,28 @@ export class TelegramService {
    */
   async completeRegistration(
     userId: string,
-    data: { username: string; password: string; phone: string }
+    data: { username: string; password: string; phone: string },
   ) {
     const { username, password, phone } = data;
 
     console.log(
-      `[completeRegistration] userId: ${userId}, username: ${username}`
+      `[completeRegistration] userId: ${userId}, username: ${username}`,
     );
 
     // First check if user exists
-    const existingUserById = await this.prisma.user.findUnique({
+    const existingUserById = await this.userRepository.findOne({
       where: { id: userId },
     });
 
     if (!existingUserById) {
       console.log(`[completeRegistration] User not found with id: ${userId}`);
       throw new BadRequestException(
-        "Foydalanuvchi topilmadi. Iltimos, qaytadan kiring."
+        "Foydalanuvchi topilmadi. Iltimos, qaytadan kiring.",
       );
     }
 
     // Check if username is available
-    const existingUser = await this.prisma.user.findUnique({
+    const existingUser = await this.userRepository.findOne({
       where: { username },
     });
 
@@ -295,27 +301,10 @@ export class TelegramService {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Update user with new credentials
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        username,
-        password: hashedPassword,
-        telegramPhone: phone,
-      },
-      select: {
-        id: true,
-        username: true,
-        fullName: true,
-        email: true,
-        telegramId: true,
-        telegramUsername: true,
-        telegramPhone: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        role: true,
-      },
-    });
+    existingUserById.username = username;
+    existingUserById.password = hashedPassword;
+    existingUserById.telegramPhone = phone;
+    const user = await this.userRepository.save(existingUserById);
 
     // Generate new JWT token
     const token = this.jwtService.sign({
@@ -328,7 +317,17 @@ export class TelegramService {
     return {
       success: true,
       user: {
-        ...user,
+        id: user.id,
+        username: user.username,
+        fullName: user.fullName,
+        email: user.email,
+        telegramId: user.telegramId,
+        telegramUsername: user.telegramUsername,
+        telegramPhone: user.telegramPhone,
+        avatar: user.avatar,
+        totalXP: user.totalXP,
+        level: user.level,
+        role: user.role,
         isRegistrationComplete: true,
       },
       token,
@@ -339,19 +338,22 @@ export class TelegramService {
    * Get user by Telegram ID
    */
   async getUserByTelegramId(telegramId: string) {
-    return this.prisma.user.findUnique({
+    const user = await this.userRepository.findOne({
       where: { telegramId },
-      select: {
-        id: true,
-        username: true,
-        fullName: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        role: true,
-        createdAt: true,
-      },
     });
+
+    if (!user) return null;
+
+    return {
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      avatar: user.avatar,
+      totalXP: user.totalXP,
+      level: user.level,
+      role: user.role,
+      createdAt: user.createdAt,
+    };
   }
 
   /**
@@ -363,7 +365,7 @@ export class TelegramService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new BadRequestException("Telegram bot token not configured");
@@ -374,7 +376,7 @@ export class TelegramService {
       "[SENDMESSAGE] Sending to",
       chatId,
       "token:",
-      this.botToken.substring(0, 20) + "..."
+      this.botToken.substring(0, 20) + "...",
     );
 
     const response = await fetch(url, {
@@ -408,7 +410,7 @@ export class TelegramService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new BadRequestException("Telegram bot token not configured");
@@ -447,7 +449,7 @@ export class TelegramService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new BadRequestException("Telegram bot token not configured");
@@ -487,7 +489,7 @@ export class TelegramService {
       videoUrl?: string;
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     const { imageUrl, videoUrl, ...restOptions } = options || {};
 
@@ -536,7 +538,7 @@ export class TelegramService {
   async handleWebhookUpdate(update: any) {
     try {
       process.stderr.write(
-        `[WEBHOOK] Received update: ${JSON.stringify(update)}\n`
+        `[WEBHOOK] Received update: ${JSON.stringify(update)}\n`,
       );
 
       // Handle /start command - show only platform button (registration optional)
@@ -600,25 +602,25 @@ export class TelegramService {
         const from = update.message.from;
 
         console.log(
-          `[Webhook] Contact received from user ${from.id}, phone: ${contact.phone_number}`
+          `[Webhook] Contact received from user ${from.id}, phone: ${contact.phone_number}`,
         );
 
         // Save phone number to user (without sending message - Mini App handles UI)
         if (contact.user_id === from.id) {
-          const result = await this.prisma.user.updateMany({
-            where: { telegramId: from.id.toString() },
-            data: { telegramPhone: contact.phone_number },
-          });
+          const result = await this.userRepository.update(
+            { telegramId: from.id.toString() },
+            { telegramPhone: contact.phone_number },
+          );
           console.log(
-            `[Webhook] Phone saved result: ${JSON.stringify(result)}, telegramId: ${from.id}`
+            `[Webhook] Phone saved result: ${JSON.stringify(result)}, telegramId: ${from.id}`,
           );
 
-          if (result.count === 0) {
-            const existingUser = await this.prisma.user.findFirst({
+          if (result.affected === 0) {
+            const existingUser = await this.userRepository.findOne({
               where: { telegramId: from.id.toString() },
             });
             console.log(
-              `[Webhook] Existing user: ${JSON.stringify(existingUser)}`
+              `[Webhook] Existing user: ${JSON.stringify(existingUser)}`,
             );
           }
         }
@@ -637,7 +639,7 @@ export class TelegramService {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ callback_query_id: callbackQueryId }),
-          }
+          },
         );
 
         // Handle share phone request - open Mini App registration page
@@ -661,7 +663,7 @@ export class TelegramService {
                   ],
                 ],
               },
-            }
+            },
           );
         }
       }
@@ -682,7 +684,7 @@ export class TelegramService {
     let latestAvatar: string | undefined;
     try {
       const photosRes = await fetch(
-        `https://api.telegram.org/bot${this.botToken}/getUserProfilePhotos?user_id=${from.id}&limit=1`
+        `https://api.telegram.org/bot${this.botToken}/getUserProfilePhotos?user_id=${from.id}&limit=1`,
       );
       const photosJson = await photosRes.json();
       if (
@@ -693,7 +695,7 @@ export class TelegramService {
         const photoSizes = photosJson.result.photos[0];
         const fileId = photoSizes[photoSizes.length - 1].file_id;
         const fileRes = await fetch(
-          `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${fileId}`
+          `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${fileId}`,
         );
         const fileJson = await fileRes.json();
         if (fileJson.ok && fileJson.result) {
@@ -709,24 +711,21 @@ export class TelegramService {
       .join(" ");
 
     // Check if user exists
-    const existingUser = await this.prisma.user.findUnique({
+    const existingUser = await this.userRepository.findOne({
       where: { telegramId },
     });
 
     if (existingUser) {
       // Update existing user
-      await this.prisma.user.update({
-        where: { id: existingUser.id },
-        data: {
-          telegramUsername: from.username || existingUser.telegramUsername,
-          fullName: fullName || existingUser.fullName,
-          avatar: latestAvatar || existingUser.avatar,
-        },
-      });
+      existingUser.telegramUsername =
+        from.username || existingUser.telegramUsername;
+      existingUser.fullName = fullName || existingUser.fullName;
+      existingUser.avatar = latestAvatar || existingUser.avatar;
+      await this.userRepository.save(existingUser);
     } else {
       // Create new user
       let username = from.username || `user_${from.id}`;
-      const existingUsername = await this.prisma.user.findUnique({
+      const existingUsername = await this.userRepository.findOne({
         where: { username },
       });
 
@@ -734,17 +733,16 @@ export class TelegramService {
         username = `${username}_${Date.now().toString(36)}`;
       }
 
-      await this.prisma.user.create({
-        data: {
-          telegramId,
-          username,
-          telegramUsername: from.username || null,
-          fullName: fullName || username,
-          avatar: latestAvatar || null,
-          email: `${from.id}@telegram.allohgaqayting.uz`,
-          password: null,
-        },
+      const newUser = this.userRepository.create({
+        telegramId,
+        username,
+        telegramUsername: from.username || null,
+        fullName: fullName || username,
+        avatar: latestAvatar || null,
+        email: `${from.id}@telegram.allohgaqayting.uz`,
+        password: null,
       });
+      await this.userRepository.save(newUser);
     }
   }
 

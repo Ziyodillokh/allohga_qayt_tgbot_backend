@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
-import { NotificationType } from "@prisma/client";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { Notification, NotificationType } from "./entities";
+import { User } from "../users/entities";
 import { NotificationsGateway } from "./notifications.gateway";
 import { ConfigService } from "@nestjs/config";
 
@@ -17,23 +19,25 @@ export class NotificationsService {
   private botToken: string;
 
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private notificationsGateway: NotificationsGateway,
-    private configService: ConfigService
+    private configService: ConfigService,
   ) {
     this.botToken = this.configService.get<string>("TELEGRAM_BOT_TOKEN") || "";
   }
 
   async createNotification(userId: string, dto: CreateNotificationDto) {
-    const notification = await this.prisma.notification.create({
-      data: {
-        userId,
-        title: dto.title,
-        message: dto.message,
-        type: dto.type || NotificationType.SYSTEM,
-        data: dto.data,
-      },
+    const notification = this.notificationRepository.create({
+      userId,
+      title: dto.title,
+      message: dto.message,
+      type: dto.type || NotificationType.SYSTEM,
+      data: dto.data,
     });
+    await this.notificationRepository.save(notification);
 
     // Send real-time notification via WebSocket
     this.notificationsGateway.sendToUser(userId, notification);
@@ -42,15 +46,18 @@ export class NotificationsService {
   }
 
   async createBulkNotifications(userIds: string[], dto: CreateNotificationDto) {
-    const notifications = await this.prisma.notification.createMany({
-      data: userIds.map((userId) => ({
+    const notificationsToCreate = userIds.map((userId) =>
+      this.notificationRepository.create({
         userId,
         title: dto.title,
         message: dto.message,
         type: dto.type || NotificationType.SYSTEM,
         data: dto.data,
-      })),
-    });
+      }),
+    );
+    const notifications = await this.notificationRepository.save(
+      notificationsToCreate,
+    );
 
     // Send real-time notifications
     userIds.forEach((userId) => {
@@ -69,14 +76,14 @@ export class NotificationsService {
     const skip = (page - 1) * limit;
 
     const [notifications, total, unreadCount] = await Promise.all([
-      this.prisma.notification.findMany({
+      this.notificationRepository.find({
         where: { userId },
-        orderBy: { createdAt: "desc" },
+        order: { createdAt: "DESC" },
         skip,
         take: limit,
       }),
-      this.prisma.notification.count({ where: { userId } }),
-      this.prisma.notification.count({ where: { userId, isRead: false } }),
+      this.notificationRepository.count({ where: { userId } }),
+      this.notificationRepository.count({ where: { userId, isRead: false } }),
     ]);
 
     return {
@@ -92,27 +99,25 @@ export class NotificationsService {
   }
 
   async markAsRead(userId: string, notificationId: string) {
-    return this.prisma.notification.updateMany({
-      where: { id: notificationId, userId },
-      data: { isRead: true },
-    });
+    return this.notificationRepository.update(
+      { id: notificationId, userId },
+      { isRead: true },
+    );
   }
 
   async markAllAsRead(userId: string) {
-    return this.prisma.notification.updateMany({
-      where: { userId, isRead: false },
-      data: { isRead: true },
-    });
+    return this.notificationRepository.update(
+      { userId, isRead: false },
+      { isRead: true },
+    );
   }
 
   async deleteNotification(userId: string, notificationId: string) {
-    return this.prisma.notification.deleteMany({
-      where: { id: notificationId, userId },
-    });
+    return this.notificationRepository.delete({ id: notificationId, userId });
   }
 
   async getUnreadCount(userId: string) {
-    return this.prisma.notification.count({
+    return this.notificationRepository.count({
       where: { userId, isRead: false },
     });
   }
@@ -130,7 +135,7 @@ export class NotificationsService {
     this.logger.log(`Notifying users about new category: ${category.name}`);
 
     // Get all users
-    const users = await this.prisma.user.findMany({
+    const users = await this.userRepository.find({
       select: {
         id: true,
         telegramId: true,
@@ -179,16 +184,16 @@ export class NotificationsService {
         if (iconPath) {
           iconBuffer = fs.readFileSync(iconPath);
           this.logger.log(
-            `Icon loaded successfully: ${iconPath}, size: ${iconBuffer.length} bytes`
+            `Icon loaded successfully: ${iconPath}, size: ${iconBuffer.length} bytes`,
           );
         } else {
           this.logger.warn(
-            `Icon file not found in any path for: ${category.icon}`
+            `Icon file not found in any path for: ${category.icon}`,
           );
         }
       } catch (error: any) {
         this.logger.warn(
-          `Failed to read icon file: ${error?.message || error}`
+          `Failed to read icon file: ${error?.message || error}`,
         );
       }
     }
@@ -217,7 +222,7 @@ export class NotificationsService {
     // Create bulk in-app notifications
     await this.createBulkNotifications(
       users.map((u) => u.id),
-      notificationData
+      notificationData,
     );
     websocketSent = users.length;
 
@@ -253,7 +258,7 @@ export class NotificationsService {
                         ],
                       ],
                     },
-                  }
+                  },
                 );
               } else {
                 // Send text message only
@@ -275,13 +280,13 @@ export class NotificationsService {
                         ],
                       ],
                     },
-                  }
+                  },
                 );
               }
               telegramSent++;
             } catch (error: any) {
               this.logger.warn(
-                `Failed to send Telegram to ${user.telegramId}: ${error?.message || error}`
+                `Failed to send Telegram to ${user.telegramId}: ${error?.message || error}`,
               );
               errors++;
             }
@@ -297,17 +302,17 @@ export class NotificationsService {
                 iconAbsoluteUrl,
                 iconEmoji,
                 groupLabel,
-                categoryUrl
+                categoryUrl,
               );
               emailSent++;
             } catch (error: any) {
               this.logger.warn(
-                `Failed to send email to ${user.email}: ${error?.message || error}`
+                `Failed to send email to ${user.email}: ${error?.message || error}`,
               );
               errors++;
             }
           }
-        })
+        }),
       );
 
       // Small delay between batches to avoid rate limits
@@ -317,7 +322,7 @@ export class NotificationsService {
     }
 
     this.logger.log(
-      `Notifications sent - Telegram: ${telegramSent}, Email: ${emailSent}, WebSocket: ${websocketSent}, Errors: ${errors}`
+      `Notifications sent - Telegram: ${telegramSent}, Email: ${emailSent}, WebSocket: ${websocketSent}, Errors: ${errors}`,
     );
 
     return {
@@ -338,7 +343,7 @@ export class NotificationsService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new Error("Telegram bot token not configured");
@@ -375,7 +380,7 @@ export class NotificationsService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new Error("Telegram bot token not configured");
@@ -414,7 +419,7 @@ export class NotificationsService {
     options?: {
       parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
       reply_markup?: any;
-    }
+    },
   ) {
     if (!this.botToken) {
       throw new Error("Telegram bot token not configured");
@@ -464,7 +469,7 @@ export class NotificationsService {
     iconUrl: string | null,
     iconEmoji: string,
     groupLabel: string,
-    categoryUrl: string
+    categoryUrl: string,
   ) {
     const nodemailer = await import("nodemailer");
 

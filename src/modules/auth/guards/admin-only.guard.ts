@@ -1,5 +1,10 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
-import { Role } from '@prisma/client';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from "@nestjs/common";
+import { Role } from "../../users/entities/user.entity";
 
 /**
  * Guard that allows only ADMIN role to perform write operations (POST, PATCH, DELETE).
@@ -19,13 +24,15 @@ export class AdminOnlyGuard implements CanActivate {
 
     // MODERATOR can only use GET methods
     if (user?.role === Role.MODERATOR) {
-      if (method === 'GET') {
+      if (method === "GET") {
         return true;
       }
-      throw new ForbiddenException('Moderatorlar faqat ma\'lumotlarni ko\'rishlari mumkin');
+      throw new ForbiddenException(
+        "Moderatorlar faqat ma'lumotlarni ko'rishlari mumkin",
+      );
     }
 
     // Other roles - deny access
-    throw new ForbiddenException('Bu amaliyot uchun admin huquqi kerak');
+    throw new ForbiddenException("Bu amaliyot uchun admin huquqi kerak");
   }
 }

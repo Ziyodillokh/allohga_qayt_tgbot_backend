@@ -7,37 +7,46 @@ import {
   UploadedFile,
   Request,
   Param,
-} from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
-import { UploadService } from './upload.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { PrismaService } from '../../prisma/prisma.service';
-import * as fs from 'fs';
-import * as path from 'path';
-import { memoryStorage } from 'multer';
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiBody,
+} from "@nestjs/swagger";
+import { UploadService } from "./upload.service";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { User } from "../users/entities";
+import * as fs from "fs";
+import * as path from "path";
+import { memoryStorage } from "multer";
 
-@ApiTags('Upload')
+@ApiTags("Upload")
 @ApiBearerAuth()
-@Controller('upload')
+@Controller("upload")
 @UseGuards(JwtAuthGuard)
 export class UploadController {
   constructor(
     private readonly uploadService: UploadService,
-    private readonly prisma: PrismaService,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
   ) {}
 
-  @Post('avatar')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({ summary: 'Upload user avatar' })
-  @ApiConsumes('multipart/form-data')
+  @Post("avatar")
+  @UseInterceptors(FileInterceptor("file"))
+  @ApiOperation({ summary: "Upload user avatar" })
+  @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
-      type: 'object',
+      type: "object",
       properties: {
         file: {
-          type: 'string',
-          format: 'binary',
+          type: "string",
+          format: "binary",
         },
       },
     },
@@ -46,31 +55,31 @@ export class UploadController {
     @UploadedFile() file: Express.Multer.File,
     @Request() req: any,
   ) {
-    console.log('[Upload Controller] ========== AVATAR UPLOAD ==========');
-    console.log('[Upload Controller] User ID:', req.user?.id);
-    console.log('[Upload Controller] File:', file?.originalname);
-    
+    console.log("[Upload Controller] ========== AVATAR UPLOAD ==========");
+    console.log("[Upload Controller] User ID:", req.user?.id);
+    console.log("[Upload Controller] File:", file?.originalname);
+
     // 1. Faylni saqlash
     const ext = path.extname(file.originalname).toLowerCase();
     const filename = `${req.user.id}-${Date.now()}${ext}`;
-    const uploadDir = './uploads/avatars';
+    const uploadDir = "./uploads/avatars";
     const filepath = path.join(uploadDir, filename);
-    
+
     // Papka mavjudligini tekshirish
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
-    
+
     await fs.promises.writeFile(filepath, file.buffer);
-    console.log('[Upload Controller] File saved:', filepath);
-    
+    console.log("[Upload Controller] File saved:", filepath);
+
     const avatarUrl = `/uploads/avatars/${filename}`;
-    
-    // 2. Database'ni yangilash - TO'G'RIDAN-TO'G'RI PRISMA BILAN
-    console.log('[Upload Controller] Updating database with URL:', avatarUrl);
-    const updatedUser = await this.prisma.user.update({
+
+    // 2. Database'ni yangilash - TypeORM BILAN
+    console.log("[Upload Controller] Updating database with URL:", avatarUrl);
+    await this.userRepository.update(req.user.id, { avatar: avatarUrl });
+    const updatedUser = await this.userRepository.findOne({
       where: { id: req.user.id },
-      data: { avatar: avatarUrl },
       select: {
         id: true,
         email: true,
@@ -83,53 +92,64 @@ export class UploadController {
         role: true,
         telegramId: true,
         createdAt: true,
-      }
+      },
     });
-    console.log('[Upload Controller] Database updated! Avatar:', updatedUser.avatar);
-    
+    console.log(
+      "[Upload Controller] Database updated! Avatar:",
+      updatedUser?.avatar,
+    );
+
     return { url: avatarUrl, user: updatedUser };
   }
 
-  @Post('attachment')
-  @UseInterceptors(FileInterceptor('file', {
-    storage: memoryStorage(),
-    limits: {
-      fileSize: 100 * 1024 * 1024, // 100MB limit for videos
-    },
-  }))
-  @ApiOperation({ summary: 'Upload attachment (images/videos)' })
-  @ApiConsumes('multipart/form-data')
+  @Post("attachment")
+  @UseInterceptors(
+    FileInterceptor("file", {
+      storage: memoryStorage(),
+      limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB limit for videos
+      },
+    }),
+  )
+  @ApiOperation({ summary: "Upload attachment (images/videos)" })
+  @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
-      type: 'object',
+      type: "object",
       properties: {
         file: {
-          type: 'string',
-          format: 'binary',
+          type: "string",
+          format: "binary",
         },
       },
     },
   })
   async uploadAttachment(@UploadedFile() file: Express.Multer.File) {
-    console.log('[Upload Controller] Attachment upload request received');
-    console.log('[Upload Controller] File:', file ? file.originalname : 'NO FILE');
-    console.log('[Upload Controller] File size:', file?.size);
-    console.log('[Upload Controller] Buffer length:', file?.buffer?.length);
-    
+    console.log("[Upload Controller] Attachment upload request received");
+    console.log(
+      "[Upload Controller] File:",
+      file ? file.originalname : "NO FILE",
+    );
+    console.log("[Upload Controller] File size:", file?.size);
+    console.log("[Upload Controller] Buffer length:", file?.buffer?.length);
+
     try {
       const result = await this.uploadService.uploadAttachment(file);
-      console.log('[Upload Controller] Upload success:', result);
+      console.log("[Upload Controller] Upload success:", result);
       return result; // Return the full result object with url, filename, size, mimetype
     } catch (error: any) {
-      console.error('[Upload Controller] Upload error:', error?.message || error);
+      console.error(
+        "[Upload Controller] Upload error:",
+        error?.message || error,
+      );
       throw error;
     }
   }
 
-  @Delete(':filename')
-  @ApiOperation({ summary: 'Delete uploaded file' })
-  async deleteFile(@Param('filename') filename: string) {
+  @Delete(":filename")
+  @ApiOperation({ summary: "Delete uploaded file" })
+  async deleteFile(@Param("filename") filename: string) {
     await this.uploadService.deleteFile(filename);
-    return { message: 'Fayl o\'chirildi' };
+    return { message: "Fayl o'chirildi" };
   }
 }

@@ -8,7 +8,7 @@
 
 - **Framework:** NestJS 10+
 - **Language:** TypeScript
-- **Database:** PostgreSQL + Prisma ORM
+- **Database:** PostgreSQL + TypeORM
 - **Authentication:** JWT + Passport
 - **Caching:** Redis + IORedis
 - **Real-time:** Socket.IO
@@ -32,12 +32,6 @@
 ```bash
 # Install dependencies
 npm install
-
-# Generate Prisma client
-npx prisma generate
-
-# Run migrations
-npx prisma migrate dev
 
 # Start development server
 npm run start:dev
@@ -106,11 +100,6 @@ src/
 │   └── admin/             # Admin operations
 ├── app.module.ts          # Root module
 └── main.ts                # Application entry point
-
-prisma/
-├── schema.prisma          # Database schema
-├── migrations/            # Migration files
-└── seed.ts                # Seed data
 
 scripts/                    # Utility & migration scripts
 ```
@@ -209,12 +198,6 @@ npm run start:debug       # Debug mode
 npm run build             # Compile TypeScript to JavaScript
 npm run start:prod        # Run compiled code
 
-# Database
-npx prisma generate      # Generate Prisma client
-npx prisma migrate dev   # Create and run migration
-npx prisma studio        # Open Prisma Studio UI
-npx prisma seed          # Seed initial data
-
 # Code Quality
 npm run lint              # Run ESLint
 npm run format            # Format code with Prettier
@@ -248,58 +231,9 @@ Authorization: Bearer <your_jwt_token>
 
 ## 📊 Database
 
-### Schema Overview
+### TypeORM Entities
 
-```prisma
-// Users
-model User {
-  id          String   @id @default(cuid())
-  email       String   @unique
-  password    String
-  name        String
-  avatar      String?
-  xp          Int      @default(0)
-  level       Int      @default(1)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-
-// Tests
-model Test {
-  id          String   @id @default(cuid())
-  userId      String
-  categoryId  String
-  score       Int
-  totalQuestions Int
-  correctAnswers Int
-  completedAt DateTime?
-  createdAt   DateTime @default(now())
-}
-
-// Questions
-model Question {
-  id          String   @id @default(cuid())
-  categoryId  String
-  title       String
-  options     Json
-  correctAnswer String
-  explanation String?
-  difficulty  String
-  createdAt   DateTime @default(now())
-}
-
-// Categories
-model Category {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String?
-  icon        String?
-  color       String?
-  createdAt   DateTime @default(now())
-}
-```
-
-See [prisma/schema.prisma](prisma/schema.prisma) for complete schema.
+Entity fayllar `src/modules/*/entities/` papkalarida joylashgan. Har bir modul o'zining entity fayllariga ega.
 
 ---
 
@@ -349,7 +283,7 @@ All endpoints are documented with:
 - ✅ Helmet for HTTP headers
 - ✅ Rate limiting
 - ✅ Input validation
-- ✅ SQL injection protection (Prisma)
+- ✅ SQL injection protection (TypeORM)
 - ✅ HTTPS support
 
 ---
@@ -390,7 +324,6 @@ GEMINI_API_KEY=<your-api-key>
 ```bash
 # Check PostgreSQL is running
 # Verify DATABASE_URL in .env
-# Run migrations: npx prisma migrate dev
 ```
 
 ### Port Already in Use
@@ -401,23 +334,12 @@ GEMINI_API_KEY=<your-api-key>
 # Or change PORT in .env
 ```
 
-### Prisma Client Issues
-
-```bash
-# Regenerate client
-npx prisma generate
-
-# Clear cache
-rm -rf node_modules/.prisma
-npm install
-```
-
 ---
 
 ## 📚 Resources
 
 - [NestJS Documentation](https://docs.nestjs.com/)
-- [Prisma Documentation](https://www.prisma.io/docs/)
+- [TypeORM Documentation](https://typeorm.io/)
 - [PostgreSQL Documentation](https://www.postgresql.org/docs/)
 - [JWT Guide](https://jwt.io/)
 - [Telegram Bot API](https://core.telegram.org/bots/api)

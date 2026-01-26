@@ -3,45 +3,122 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, IsNull, Not } from "typeorm";
 import { UsersService } from "../users/users.service";
 import { QuestionsService } from "../questions/questions.service";
 import { AchievementsService } from "../achievements/achievements.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { StartTestDto } from "./dto/start-test.dto";
 import { SubmitTestDto } from "./dto/submit-test.dto";
+import { TestAttempt, TestAnswer } from "./entities";
+import { Question } from "../questions/entities";
+import { Category, CategoryStat } from "../categories/entities";
+import { NotificationType } from "../notifications/entities/notification.entity";
 
 @Injectable()
 export class TestsService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(TestAttempt)
+    private testAttemptRepository: Repository<TestAttempt>,
+    @InjectRepository(TestAnswer)
+    private testAnswerRepository: Repository<TestAnswer>,
+    @InjectRepository(Question)
+    private questionRepository: Repository<Question>,
+    @InjectRepository(CategoryStat)
+    private categoryStatRepository: Repository<CategoryStat>,
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
     private usersService: UsersService,
     private questionsService: QuestionsService,
     private achievementsService: AchievementsService,
-    private notificationsService: NotificationsService
+    private notificationsService: NotificationsService,
   ) {}
+
+  async saveTestResult(
+    userId: string | null,
+    dto: {
+      categorySlug: string;
+      score: number;
+      totalQuestions: number;
+      totalXP: number;
+      answers: { questionId: string; answer: number; isCorrect: boolean }[];
+    },
+  ) {
+    // Find category by slug
+    const category = await this.categoryRepository.findOne({
+      where: { slug: dto.categorySlug },
+    });
+
+    if (!category) {
+      throw new NotFoundException("Kategoriya topilmadi");
+    }
+
+    // Create test attempt record
+    const testAttempt = this.testAttemptRepository.create({
+      userId: userId || null, // null for anonymous users (UUID cannot be empty string)
+      categoryId: category.id,
+      totalQuestions: dto.totalQuestions,
+      correctAnswers: dto.score,
+      score: Math.round((dto.score / dto.totalQuestions) * 100),
+      xpEarned: dto.totalXP,
+      completedAt: new Date(),
+    });
+
+    await this.testAttemptRepository.save(testAttempt);
+
+    // Save answers
+    for (const answer of dto.answers) {
+      const testAnswer = this.testAnswerRepository.create({
+        testAttemptId: testAttempt.id,
+        questionId: answer.questionId,
+        selectedAnswer: answer.answer,
+        isCorrect: answer.isCorrect,
+      });
+      await this.testAnswerRepository.save(testAnswer);
+    }
+
+    // If user is authenticated, update their stats
+    if (userId) {
+      // Add XP to user
+      await this.usersService.addXP(userId, dto.totalXP);
+      // Increment testsCompleted count - har bir savol 1 ta test hisoblanadi
+      await this.usersService.incrementTestsCompleted(
+        userId,
+        dto.totalQuestions,
+      );
+    }
+
+    return {
+      success: true,
+      testAttemptId: testAttempt.id,
+      score: dto.score,
+      totalQuestions: dto.totalQuestions,
+      percentage: Math.round((dto.score / dto.totalQuestions) * 100),
+      xpEarned: dto.totalXP,
+    };
+  }
 
   async startTest(userId: string | null, dto: StartTestDto) {
     // Get random questions
     const questions = await this.questionsService.getRandomQuestionsSimple(
       dto.categoryId || null,
-      dto.questionsCount || 10
+      dto.questionsCount || 10,
     );
 
     if (questions.length === 0) {
       throw new BadRequestException(
-        "Bu kategoriyada yetarli savol mavjud emas"
+        "Bu kategoriyada yetarli savol mavjud emas",
       );
     }
 
     // Create test attempt (userId can be null for unauthenticated users)
-    const testAttempt = await this.prisma.testAttempt.create({
-      data: {
-        userId: userId || "",
-        categoryId: dto.categoryId || null,
-        totalQuestions: questions.length,
-      },
+    const testAttempt = this.testAttemptRepository.create({
+      userId: userId || null,
+      categoryId: dto.categoryId || null,
+      totalQuestions: questions.length,
     });
+    await this.testAttemptRepository.save(testAttempt);
 
     // Return questions without correct answers
     const questionsForUser = questions.map((q: any) => ({
@@ -63,7 +140,7 @@ export class TestsService {
 
   async submitTest(userId: string, testAttemptId: string, dto: SubmitTestDto) {
     // Get test attempt
-    const testAttempt = await this.prisma.testAttempt.findFirst({
+    const testAttempt = await this.testAttemptRepository.findOne({
       where: { id: testAttemptId, userId: userId || undefined },
     });
 
@@ -81,7 +158,7 @@ export class TestsService {
     const results: any[] = [];
 
     for (const answer of dto.answers) {
-      const question = await this.prisma.question.findUnique({
+      const question = await this.questionRepository.findOne({
         where: { id: answer.questionId },
       });
 
@@ -94,15 +171,14 @@ export class TestsService {
       }
 
       // Save answer
-      await this.prisma.testAnswer.create({
-        data: {
-          testAttemptId,
-          questionId: answer.questionId,
-          selectedAnswer: answer.selectedAnswer,
-          isCorrect,
-          timeSpent: answer.timeSpent,
-        },
+      const testAnswer = this.testAnswerRepository.create({
+        testAttemptId,
+        questionId: answer.questionId,
+        selectedAnswer: answer.selectedAnswer,
+        isCorrect,
+        timeSpent: answer.timeSpent,
       });
+      await this.testAnswerRepository.save(testAnswer);
 
       results.push({
         questionId: answer.questionId,
@@ -118,25 +194,25 @@ export class TestsService {
 
     // Calculate score (percentage)
     const score = Math.round(
-      (correctAnswers / testAttempt.totalQuestions) * 100
+      (correctAnswers / testAttempt.totalQuestions) * 100,
     );
 
     // Update test attempt
-    await this.prisma.testAttempt.update({
-      where: { id: testAttemptId },
-      data: {
-        score,
-        correctAnswers,
-        xpEarned: totalXP,
-        timeSpent: dto.totalTimeSpent,
-        completedAt: new Date(),
-      },
+    await this.testAttemptRepository.update(testAttemptId, {
+      score,
+      correctAnswers,
+      xpEarned: totalXP,
+      timeSpent: dto.totalTimeSpent,
+      completedAt: new Date(),
     });
 
     // Add XP to user (only if authenticated)
     let levelUpInfo: { newLevel: number; totalXP: number } | null = null;
     if (userId && testAttempt.userId) {
       const xpResult = await this.usersService.addXP(userId, totalXP);
+
+      // Increment user's testsCompleted count
+      await this.usersService.incrementTestsCompleted(userId);
 
       // Update category stats
       if (testAttempt.categoryId) {
@@ -146,7 +222,7 @@ export class TestsService {
           correctAnswers,
           testAttempt.totalQuestions,
           totalXP,
-          score
+          score,
         );
       }
 
@@ -158,7 +234,7 @@ export class TestsService {
         await this.notificationsService.createNotification(userId, {
           title: "Yangi daraja! 🎉",
           message: `Tabriklaymiz! Siz ${xpResult.newLevel}-darajaga ko'tarildingiz!`,
-          type: "LEVEL_UP",
+          type: NotificationType.LEVEL_UP,
           data: { level: xpResult.newLevel },
         });
 
@@ -181,27 +257,9 @@ export class TestsService {
   }
 
   async getTestResult(userId: string, testAttemptId: string) {
-    const testAttempt = await this.prisma.testAttempt.findFirst({
+    const testAttempt = await this.testAttemptRepository.findOne({
       where: { id: testAttemptId, userId },
-      include: {
-        category: {
-          select: { id: true, name: true, slug: true, icon: true },
-        },
-        testAnswers: {
-          include: {
-            question: {
-              select: {
-                id: true,
-                question: true,
-                options: true,
-                correctAnswer: true,
-                explanation: true,
-                difficulty: true,
-              },
-            },
-          },
-        },
-      },
+      relations: ["category", "testAnswers", "testAnswers.question"],
     });
 
     if (!testAttempt) {
@@ -214,28 +272,13 @@ export class TestsService {
   async getUserTestHistory(userId: string, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
-    const [tests, total] = await Promise.all([
-      this.prisma.testAttempt.findMany({
-        where: { userId, completedAt: { not: null } },
-        include: {
-          category: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              icon: true,
-              color: true,
-            },
-          },
-        },
-        orderBy: { completedAt: "desc" },
-        skip,
-        take: limit,
-      }),
-      this.prisma.testAttempt.count({
-        where: { userId, completedAt: { not: null } },
-      }),
-    ]);
+    const [tests, total] = await this.testAttemptRepository.findAndCount({
+      where: { userId, completedAt: Not(IsNull()) },
+      relations: ["category"],
+      order: { completedAt: "DESC" },
+      skip,
+      take: limit,
+    });
 
     return {
       tests,
@@ -254,12 +297,10 @@ export class TestsService {
     correctAnswers: number,
     totalQuestions: number,
     xpEarned: number,
-    score: number
+    score: number,
   ) {
-    const existing = await this.prisma.categoryStat.findUnique({
-      where: {
-        userId_categoryId: { userId, categoryId },
-      },
+    const existing = await this.categoryStatRepository.findOne({
+      where: { userId, categoryId },
     });
 
     if (existing) {
@@ -271,30 +312,26 @@ export class TestsService {
         (existing.averageScore * existing.totalTests + score) / newTotalTests;
       const newBestScore = Math.max(existing.bestScore, score);
 
-      await this.prisma.categoryStat.update({
-        where: { id: existing.id },
-        data: {
-          totalTests: newTotalTests,
-          totalQuestions: newTotalQuestions,
-          correctAnswers: newCorrectAnswers,
-          totalXP: newTotalXP,
-          averageScore: newAverageScore,
-          bestScore: newBestScore,
-        },
+      await this.categoryStatRepository.update(existing.id, {
+        totalTests: newTotalTests,
+        totalQuestions: newTotalQuestions,
+        correctAnswers: newCorrectAnswers,
+        totalXP: newTotalXP,
+        averageScore: newAverageScore,
+        bestScore: newBestScore,
       });
     } else {
-      await this.prisma.categoryStat.create({
-        data: {
-          userId,
-          categoryId,
-          totalTests: 1,
-          totalQuestions,
-          correctAnswers,
-          totalXP: xpEarned,
-          averageScore: score,
-          bestScore: score,
-        },
+      const categoryStat = this.categoryStatRepository.create({
+        userId,
+        categoryId,
+        totalTests: 1,
+        totalQuestions,
+        correctAnswers,
+        totalXP: xpEarned,
+        averageScore: score,
+        bestScore: score,
       });
+      await this.categoryStatRepository.save(categoryStat);
     }
   }
 }

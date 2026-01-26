@@ -5,8 +5,11 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 import * as bcrypt from "bcryptjs";
-import { PrismaService } from "../../prisma/prisma.service";
+import { User } from "../users/entities";
+import { EmailVerification } from "./entities";
 import { MailService } from "../mail/mail.service";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
@@ -15,13 +18,16 @@ import { TelegramAuthDto } from "./dto/telegram-auth.dto";
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(EmailVerification)
+    private emailVerificationRepository: Repository<EmailVerification>,
     private jwtService: JwtService,
-    private mailService: MailService
+    private mailService: MailService,
   ) {}
 
   async checkUsername(username: string) {
-    const existingUser = await this.prisma.user.findFirst({
+    const existingUser = await this.userRepository.findOne({
       where: { username },
     });
 
@@ -33,7 +39,7 @@ export class AuthService {
   }
 
   async checkEmail(email: string) {
-    const existingUser = await this.prisma.user.findFirst({
+    const existingUser = await this.userRepository.findOne({
       where: { email },
     });
 
@@ -48,62 +54,44 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
-    // Check if email or username already exists
-    const existingUser = await this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: dto.email }, { username: dto.username }],
-      },
+    const existingByEmail = await this.userRepository.findOne({
+      where: { email: dto.email },
+    });
+    const existingByUsername = await this.userRepository.findOne({
+      where: { username: dto.username },
     });
 
-    if (existingUser) {
-      if (existingUser.email === dto.email) {
-        throw new ConflictException("Bu email allaqachon ro'yxatdan o'tgan");
-      }
+    if (existingByEmail) {
+      throw new ConflictException("Bu email allaqachon ro'yxatdan o'tgan");
+    }
+    if (existingByUsername) {
       throw new ConflictException("Bu username allaqachon band");
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(dto.password, 12);
 
-    // Create user
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        username: dto.username,
-        password: hashedPassword,
-        fullName: dto.fullName,
-        telegramPhone: dto.telegramPhone || null,
-      },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        fullName: true,
-        avatar: true,
-        totalXP: true,
-        level: true,
-        role: true,
-        telegramPhone: true,
-        createdAt: true,
-      },
+    const user = this.userRepository.create({
+      email: dto.email,
+      username: dto.username,
+      password: hashedPassword,
+      fullName: dto.fullName,
+      telegramPhone: dto.telegramPhone || null,
     });
 
-    // Generate token
-    const token = this.generateToken(user.id, user.role);
+    const savedUser = await this.userRepository.save(user);
+    const token = this.generateToken(savedUser.id, savedUser.role);
+    const { password, ...userWithoutPassword } = savedUser;
 
-    return {
-      user,
-      token,
-    };
+    return { user: userWithoutPassword, token };
   }
 
   async login(dto: LoginDto) {
-    // Find user by email or username
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: dto.emailOrUsername }, { username: dto.emailOrUsername }],
-      },
-    });
+    const user = await this.userRepository
+      .createQueryBuilder("user")
+      .where("user.email = :login OR user.username = :login", {
+        login: dto.emailOrUsername,
+      })
+      .getOne();
 
     if (!user) {
       throw new UnauthorizedException("Noto'g'ri email/username yoki parol");
@@ -115,123 +103,91 @@ export class AuthService {
 
     if (!user.password) {
       throw new UnauthorizedException(
-        "Telegram orqali ro'yxatdan o'tgan foydalanuvchi. Telegram orqali kiring"
+        "Telegram orqali ro'yxatdan o'tgan foydalanuvchi. Telegram orqali kiring",
       );
     }
 
-    // Check password
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException("Noto'g'ri email/username yoki parol");
     }
 
-    // Update last active
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastActiveAt: new Date() },
-    });
+    await this.userRepository.update(user.id, { lastActiveAt: new Date() });
 
-    // Generate token
     const token = this.generateToken(user.id, user.role);
-
-    // Return user without password
     const { password, ...userWithoutPassword } = user;
 
-    return {
-      user: userWithoutPassword,
-      token,
-    };
+    return { user: userWithoutPassword, token };
   }
 
   async telegramAuth(dto: TelegramAuthDto) {
-    // Find or create user by Telegram ID
-    let user = await this.prisma.user.findUnique({
+    let user = await this.userRepository.findOne({
       where: { telegramId: dto.telegramId },
     });
 
     if (!user) {
-      // Create new user from Telegram
       const username = dto.username || `tg_${dto.telegramId}`;
       const uniqueUsername = await this.generateUniqueUsername(username);
 
-      user = await this.prisma.user.create({
-        data: {
-          telegramId: dto.telegramId,
-          username: uniqueUsername,
-          email: `${dto.telegramId}@telegram.bilimdon.uz`,
-          password: await bcrypt.hash(Math.random().toString(36), 12),
-          fullName:
-            `${dto.firstName || ""} ${dto.lastName || ""}`.trim() ||
-            "Telegram User",
-          avatar: dto.photoUrl || null,
-          telegramUsername: dto.username || null,
-        },
+      user = this.userRepository.create({
+        telegramId: dto.telegramId,
+        username: uniqueUsername,
+        email: `${dto.telegramId}@telegram.bilimdon.uz`,
+        password: await bcrypt.hash(Math.random().toString(36), 12),
+        fullName:
+          `${dto.firstName || ""} ${dto.lastName || ""}`.trim() ||
+          "Telegram User",
+        avatar: dto.photoUrl || null,
+        telegramUsername: dto.username || null,
       });
+
+      user = await this.userRepository.save(user);
     } else {
-      // Update last active
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { lastActiveAt: new Date() },
-      });
+      await this.userRepository.update(user.id, { lastActiveAt: new Date() });
     }
 
     if (!user.isActive) {
       throw new UnauthorizedException("Hisobingiz bloklangan");
     }
 
-    // Generate token
     const token = this.generateToken(user.id, user.role);
-
     const { password, ...userWithoutPassword } = user;
 
-    return {
-      user: userWithoutPassword,
-      token,
-    };
+    return { user: userWithoutPassword, token };
   }
 
   async getProfile(userId: string) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        fullName: true,
-        avatar: true,
-        bio: true,
-        totalXP: true,
-        level: true,
-        role: true,
-        telegramId: true,
-        telegramUsername: true,
-        telegramPhone: true,
-        createdAt: true,
-        updatedAt: true,
-        _count: {
-          select: {
-            testAttempts: true,
-            userAchievements: { where: { unlockedAt: { not: null } } },
-          },
-        },
-      },
+      relations: ["testAttempts", "userAchievements"],
     });
 
     if (!user) {
       throw new UnauthorizedException("Foydalanuvchi topilmadi");
     }
 
-    return user;
+    const testAttemptsCount = user.testAttempts?.length || 0;
+    const unlockedAchievements =
+      user.userAchievements?.filter((ua) => ua.unlockedAt).length || 0;
+
+    const { password, testAttempts, userAchievements, ...userWithoutPassword } =
+      user;
+
+    return {
+      ...userWithoutPassword,
+      _count: {
+        testAttempts: testAttemptsCount,
+        userAchievements: unlockedAchievements,
+      },
+    };
   }
 
   async changePassword(
     userId: string,
     oldPassword: string,
-    newPassword: string
+    newPassword: string,
   ) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
       throw new UnauthorizedException("Foydalanuvchi topilmadi");
@@ -239,7 +195,7 @@ export class AuthService {
 
     if (!user.password) {
       throw new BadRequestException(
-        "Telegram orqali ro'yxatdan o'tgan foydalanuvchi uchun parol o'zgartirish mumkin emas"
+        "Telegram orqali ro'yxatdan o'tgan foydalanuvchi uchun parol o'zgartirish mumkin emas",
       );
     }
 
@@ -249,20 +205,13 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
-
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword },
-    });
+    await this.userRepository.update(userId, { password: hashedPassword });
 
     return { message: "Parol muvaffaqiyatli o'zgartirildi" };
   }
 
   private generateToken(userId: string, role: string) {
-    return this.jwtService.sign({
-      sub: userId,
-      role,
-    });
+    return this.jwtService.sign({ sub: userId, role });
   }
 
   private async generateUniqueUsername(baseUsername: string): Promise<string> {
@@ -270,46 +219,45 @@ export class AuthService {
     let counter = 0;
 
     while (true) {
-      const existingUser = await this.prisma.user.findUnique({
-        where: { username: counter === 0 ? username : `${username}${counter}` },
+      const checkUsername = counter === 0 ? username : `${username}${counter}`;
+      const existingUser = await this.userRepository.findOne({
+        where: { username: checkUsername },
       });
 
       if (!existingUser) {
-        return counter === 0 ? username : `${username}${counter}`;
+        return checkUsername;
       }
-
       counter++;
     }
   }
 
   async sendVerificationCode(email: string) {
-    // Generate 6-digit code
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    // Save to database
-    await this.prisma.emailVerification.upsert({
+    let verification = await this.emailVerificationRepository.findOne({
       where: { email },
-      create: {
+    });
+
+    if (verification) {
+      verification.code = code;
+      verification.expiresAt = expiresAt;
+      verification.verified = false;
+    } else {
+      verification = this.emailVerificationRepository.create({
         email,
         code,
         expiresAt,
         verified: false,
-      },
-      update: {
-        code,
-        expiresAt,
-        verified: false,
-      },
-    });
+      });
+    }
 
-    // Send email - handle errors gracefully
+    await this.emailVerificationRepository.save(verification);
+
     try {
       await this.mailService.sendVerificationCode(email, code);
     } catch (error: any) {
       console.error("Email yuborishda xatolik:", error?.message || error);
-      // Don't throw - just log error and continue
-      // Return success anyway since code is saved in database
     }
 
     return {
@@ -319,7 +267,7 @@ export class AuthService {
   }
 
   async verifyEmail(email: string, code: string) {
-    const verification = await this.prisma.emailVerification.findUnique({
+    const verification = await this.emailVerificationRepository.findOne({
       where: { email },
     });
 
@@ -339,113 +287,86 @@ export class AuthService {
       throw new BadRequestException("Tasdiqlash kodi muddati tugagan");
     }
 
-    // Mark as verified
-    await this.prisma.emailVerification.update({
-      where: { email },
-      data: { verified: true },
+    await this.emailVerificationRepository.update(verification.id, {
+      verified: true,
     });
 
     return { message: "Email muvaffaqiyatli tasdiqlandi" };
   }
 
   async sendPhoneToTelegram(phone: string, email: string) {
-    // Here you would integrate with Telegram Bot API
-    // For now, just save to database or log
-    console.log(`Saving phone ${phone} for email ${email}`);
-
     if (!email) {
       return { message: "Email kerak" };
     }
 
     try {
-      const user = await this.prisma.user.findUnique({ where: { email } });
+      const user = await this.userRepository.findOne({ where: { email } });
       if (user) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { telegramPhone: phone },
-        });
+        await this.userRepository.update(user.id, { telegramPhone: phone });
       }
     } catch (err) {
       console.error("Error saving telegram phone:", err);
     }
 
-    // TODO: optionally notify admin via bot about the phone
     return { message: "Telefon raqam saqlandi" };
   }
 
   async forgotPassword(email: string) {
-    console.log("🔍 forgotPassword called with email:", email);
+    const user = await this.userRepository.findOne({ where: { email } });
 
-    // Find user by email
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
-
-    console.log("👤 User found:", user ? "YES - " + user.email : "NO");
-
-    // 1. Agar user bazada yo'q - taklif havolasi yuborish
     if (!user) {
-      console.log("📨 User not found. Sending INVITE email to:", email);
       try {
         await this.mailService.sendInviteEmail(email);
-        console.log("✅ Invite email sent successfully");
       } catch (error) {
-        console.error("❌ Invite email yuborishda xatolik:", error);
+        console.error("Invite email yuborishda xatolik:", error);
       }
-      const response = {
+      return {
         message: "Taklif havolasi yuborildi",
         type: "invite",
         registered: false,
       };
-      console.log("📤 Returning response:", response);
-      return response;
     }
 
-    // 2. User bazada bor - parol tiklash kodi yuborish
-    // Generate reset token (6 ta raqam)
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 daqiqa
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Save to EmailVerification table (reusing for reset)
-    await this.prisma.emailVerification.upsert({
+    let verification = await this.emailVerificationRepository.findOne({
       where: { email },
-      update: {
-        code: resetCode,
-        expiresAt,
-        verified: false,
-      },
-      create: {
+    });
+
+    if (verification) {
+      verification.code = resetCode;
+      verification.expiresAt = expiresAt;
+      verification.verified = false;
+    } else {
+      verification = this.emailVerificationRepository.create({
         email,
         code: resetCode,
         expiresAt,
-      },
-    });
+      });
+    }
 
-    // Send email with reset code
-    console.log("📧 Sending PASSWORD RESET email to:", email);
+    await this.emailVerificationRepository.save(verification);
+
     try {
       await this.mailService.sendPasswordResetEmail(
         email,
         resetCode,
-        user.fullName
+        user.fullName,
       );
-      console.log("✅ Password reset email sent successfully");
     } catch (error) {
-      console.error("❌ Email yuborishda xatolik:", error);
+      console.error("Email yuborishda xatolik:", error);
     }
 
-    const response = {
+    return {
       message: "Parolni tiklash kodi emailga yuborildi",
       type: "reset",
       registered: true,
     };
-    console.log("📤 Returning response:", response);
-    return response;
   }
 
   async resetPassword(email: string, code: string, newPassword: string) {
-    // Find verification code
-    const verification = await this.prisma.emailVerification.findUnique({
+    const verification = await this.emailVerificationRepository.findOne({
       where: { email },
     });
 
@@ -459,32 +380,19 @@ export class AuthService {
 
     if (verification.expiresAt < new Date()) {
       throw new BadRequestException(
-        "Kod muddati tugagan. Qayta urinib ko'ring"
+        "Kod muddati tugagan. Qayta urinib ko'ring",
       );
     }
 
-    // Find user
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await this.userRepository.findOne({ where: { email } });
 
     if (!user) {
       throw new BadRequestException("Foydalanuvchi topilmadi");
     }
 
-    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 12);
-
-    // Update password
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { password: hashedPassword },
-    });
-
-    // Delete verification code
-    await this.prisma.emailVerification.delete({
-      where: { email },
-    });
+    await this.userRepository.update(user.id, { password: hashedPassword });
+    await this.emailVerificationRepository.delete(verification.id);
 
     return { message: "Parol muvaffaqiyatli yangilandi" };
   }
