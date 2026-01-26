@@ -103,18 +103,18 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
       let aiResponse: string | null = null;
 
-      // OpenRouter API (bepul modellar bilan)
-      if (this.openrouterApiKey) {
+      // Gemini API (asosiy)
+      if (this.geminiApiKey) {
+        aiResponse = await this.callGemini(contents);
+      }
+
+      // OpenRouter API fallback (bepul modellar bilan)
+      if (!aiResponse && this.openrouterApiKey) {
         aiResponse = await this.callOpenRouter(
           systemPrompt,
           dto.message,
           chatHistory,
         );
-      }
-
-      // Gemini API fallback
-      if (!aiResponse && this.geminiApiKey) {
-        aiResponse = await this.callGemini(contents);
       }
 
       if (!aiResponse) {
@@ -296,10 +296,11 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
   ): Promise<string | null> {
+    // Gemini 1.5 Flash - eng yaxshi bepul model
     const models = [
-      "gemini-2.0-flash-exp",
-      "gemini-1.5-flash-8b",
-      "gemini-1.0-pro",
+      "gemini-1.5-flash",
+      "gemini-1.5-flash-latest",
+      "gemini-pro",
     ];
 
     for (const model of models) {
