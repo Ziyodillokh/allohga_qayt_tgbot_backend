@@ -9,16 +9,8 @@ import { ChatDto } from "./dto/chat.dto";
 
 @Injectable()
 export class AIService {
-  private apiKey: string;
-  private apiUrl: string;
-  // Fallback models list - try each one until success
-  // O'zbekcha uchun eng yaxshi modellar birinchi o'rinda
-  private models: string[] = [
-    "meta-llama/llama-3.3-70b-instruct:free", // Eng yaxshi - ko'p tillarni biladi
-    "qwen/qwen-2.5-7b-instruct:free", // Qwen - o'zbekchani yaxshi biladi
-    "google/gemma-2-9b-it:free", // Gemma - yaxshi sifat
-    "mistralai/mistral-7b-instruct:free", // Mistral - backup
-  ];
+  private geminiApiKey: string;
+  private openrouterApiKey: string;
 
   constructor(
     private configService: ConfigService,
@@ -29,16 +21,15 @@ export class AIService {
     @InjectRepository(Category)
     private categoryRepository: Repository<Category>,
   ) {
-    // OpenRouter API - works in all regions (bypasses geo-restrictions)
-    this.apiKey =
-      this.configService.get<string>("OPENROUTER_API_KEY") ||
-      this.configService.get<string>("GEMINI_API_KEY") ||
-      "";
-    this.apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+    // API keys - process.env dan olish
+    this.geminiApiKey = process.env.GEMINI_API_KEY || this.configService.get<string>("GEMINI_API_KEY") || "";
+    this.openrouterApiKey = process.env.OPENROUTER_API_KEY || this.configService.get<string>("OPENROUTER_API_KEY") || "";
+    console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
+    console.log("OPENROUTER_API_KEY configured:", this.openrouterApiKey ? "YES" : "NO");
   }
 
   async chat(userId: string, dto: ChatDto) {
-    if (!this.apiKey) {
+    if (!this.geminiApiKey && !this.openrouterApiKey) {
       throw new BadRequestException("AI xizmati sozlanmagan");
     }
 
@@ -67,102 +58,57 @@ export class AIService {
       select: { message: true, response: true },
     });
 
-    // Build context
-    let systemPrompt = `Sen "Bilimdon" ta'lim platformasining AI yordamchisisan.
+    // Build system prompt
+    const systemPrompt = `Sen "Tavba" islomiy ta'lim platformasining AI yordamchisisan.
 
 MUHIM QOIDALAR:
-1. FAQAT O'ZBEK TILIDA javob ber - boshqa tilda javob berMA
+1. FAQAT O'ZBEK TILIDA javob ber
 2. Har safar o'zingni tanishtirma - to'g'ridan-to'g'ri savolga javob ber
 3. Aniq, qisqa va foydali ma'lumot ber
-4. Agar bilmasang "Bu haqida aniq ma'lumotim yo'q" de
-5. Grammatik to'g'ri o'zbek tilida yoz
+4. Islomiy mavzularda Qur'on va hadis asosida javob ber
+5. Agar bilmasang "Bu haqida aniq ma'lumotim yo'q" de
+6. Hurmatli va muloyim tonda muloqot qil
 
-MAVZULAR: Dasturlash (Python, JavaScript, Java, C++), Matematika, Fizika, Kimyo, Biologiya, Tarix, Ingliz tili, Adabiyot.
+MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom tarixi.`;
 
-Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
+    // Build conversation for Gemini
+    const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
 
-    if (dto.categorySlug) {
-      systemPrompt += `\n\nHozirgi suhbat "${dto.categorySlug}" kategoriyasi bo'yicha. Shu mavzuga oid savollarga javob ber.`;
+    // Add chat history in chronological order
+    const reversedChats = [...chatHistory].reverse();
+    for (const chat of reversedChats) {
+      contents.push({ role: "user", parts: [{ text: chat.message }] });
+      contents.push({ role: "model", parts: [{ text: chat.response }] });
     }
 
-    // Build conversation history for context
-    const conversationContext = chatHistory
-      .reverse()
-      .map((chat) => `Foydalanuvchi: ${chat.message}\nAI: ${chat.response}`)
-      .join("\n\n");
-
-    const userMessage = conversationContext
-      ? `Oldingi suhbat:\n${conversationContext}\n\nFoydalanuvchi: ${dto.message}`
+    // Add current message with system context for first message
+    const userMessage = reversedChats.length === 0 
+      ? `${systemPrompt}\n\nFoydalanuvchi savoli: ${dto.message}`
       : dto.message;
+    contents.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      console.log(
-        "AI Request - Models:",
-        this.models,
-        "Message:",
-        dto.message.substring(0, 50),
-      );
+      console.log("Calling AI API with message:", dto.message.substring(0, 50));
 
       let aiResponse: string | null = null;
-      let lastError: Error | null = null;
 
-      // Try each model until one succeeds
-      for (const model of this.models) {
-        try {
-          console.log("Trying model:", model);
-
-          const response = await fetch(this.apiUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${this.apiKey}`,
-              "HTTP-Referer": "http://localhost:3000",
-              "X-Title": "Allohga Qayting AI",
-            },
-            body: JSON.stringify({
-              model: model,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userMessage },
-              ],
-              max_tokens: 2048,
-            }),
-          });
-
-          const responseText = await response.text();
-          console.log("AI Response status for", model, ":", response.status);
-
-          if (!response.ok) {
-            console.error(
-              "OpenRouter API Error for",
-              model,
-              ":",
-              response.status,
-              responseText,
-            );
-            lastError = new Error(`API error: ${response.status}`);
-            continue; // Try next model
-          }
-
-          const data = JSON.parse(responseText);
-          aiResponse = data.choices?.[0]?.message?.content;
-
-          if (aiResponse) {
-            console.log("Success with model:", model);
-            break; // Success, exit loop
-          }
-        } catch (modelError) {
-          console.error("Error with model", model, ":", modelError);
-          lastError = modelError as Error;
-          continue; // Try next model
-        }
+      // OpenRouter API (bepul modellar bilan)
+      if (this.openrouterApiKey) {
+        aiResponse = await this.callOpenRouter(systemPrompt, dto.message, chatHistory);
+      }
+      
+      // Gemini API fallback
+      if (!aiResponse && this.geminiApiKey) {
+        aiResponse = await this.callGemini(contents);
       }
 
       if (!aiResponse) {
-        throw lastError || new Error("All models failed");
+        throw new Error("All AI providers failed");
       }
 
-      // Clean response from model artifacts like <s>, </s>, etc.
+      console.log("AI response received successfully");
+
+      // Clean response
       aiResponse = aiResponse
         .replace(/<s>/g, "")
         .replace(/<\/s>/g, "")
@@ -253,5 +199,115 @@ Kod so'ralganda to'liq va ishlaydigan kod yoz, izohlar o'zbekchada bo'lsin.`;
       limit: 100,
       remaining: Math.max(0, 100 - count),
     };
+  }
+
+  // OpenRouter API - bepul modellar bilan
+  private async callOpenRouter(systemPrompt: string, message: string, chatHistory: any[]): Promise<string | null> {
+    const models = [
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "qwen/qwen-2.5-7b-instruct:free",
+      "google/gemma-2-9b-it:free",
+      "mistralai/mistral-7b-instruct:free",
+    ];
+
+    // Build messages
+    const messages = [
+      { role: "system", content: systemPrompt },
+    ];
+
+    // Add chat history
+    const reversedChats = [...chatHistory].reverse();
+    for (const chat of reversedChats) {
+      messages.push({ role: "user", content: chat.message });
+      messages.push({ role: "assistant", content: chat.response });
+    }
+    messages.push({ role: "user", content: message });
+
+    for (const model of models) {
+      try {
+        console.log("Trying OpenRouter model:", model);
+
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.openrouterApiKey}`,
+            "HTTP-Referer": "https://allohgaqayt.uz",
+            "X-Title": "Tavba AI",
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: messages,
+            max_tokens: 2048,
+            temperature: 0.7,
+          }),
+        });
+
+        const responseText = await response.text();
+        console.log("OpenRouter Response status for", model, ":", response.status);
+
+        if (!response.ok) {
+          console.error("OpenRouter Error for", model, ":", response.status);
+          continue;
+        }
+
+        const data = JSON.parse(responseText);
+        const aiResponse = data.choices?.[0]?.message?.content;
+
+        if (aiResponse) {
+          console.log("Success with OpenRouter model:", model);
+          return aiResponse;
+        }
+      } catch (error) {
+        console.error("Error with OpenRouter model", model, ":", error);
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  // Gemini API
+  private async callGemini(contents: Array<{ role: string; parts: Array<{ text: string }> }>): Promise<string | null> {
+    const models = ["gemini-2.0-flash-exp", "gemini-1.5-flash-8b", "gemini-1.0-pro"];
+
+    for (const model of models) {
+      try {
+        console.log("Trying Gemini model:", model);
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.geminiApiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: contents,
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 2048,
+              },
+            }),
+          },
+        );
+
+        if (!response.ok) {
+          console.error("Gemini Error for", model, ":", response.status);
+          continue;
+        }
+
+        const data = await response.json();
+        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (aiResponse) {
+          console.log("Success with Gemini model:", model);
+          return aiResponse;
+        }
+      } catch (error) {
+        console.error("Error with Gemini model", model, ":", error);
+        continue;
+      }
+    }
+
+    return null;
   }
 }
