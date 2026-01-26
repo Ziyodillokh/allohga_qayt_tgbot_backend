@@ -62,30 +62,41 @@ import { WebsocketModule } from './modules/websocket/websocket.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const dbUrl = configService.get<string>("DATABASE_URL");
+        // Avval alohida DB_* o'zgaruvchilarini tekshirish
+        let host = configService.get<string>("DB_HOST");
+        let port = configService.get<number>("DB_PORT");
+        let username = configService.get<string>("DB_USERNAME");
+        let password = configService.get<string>("DB_PASSWORD");
+        let database = configService.get<string>("DB_DATABASE");
 
-        // DATABASE_URL dan parametrlarni ajratib olish
-        let host = "localhost";
-        let port = 5432;
-        let username = "postgres";
-        let password = "";
-        let database = "tavba";
-
-        if (dbUrl) {
-          try {
-            const regex = /postgres:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/;
-            const match = dbUrl.match(regex);
-            if (match) {
-              username = match[1];
-              password = match[2];
-              host = match[3];
-              port = parseInt(match[4]);
-              database = match[5];
+        // Agar alohida o'zgaruvchilar yo'q bo'lsa, DATABASE_URL dan olish
+        if (!host || !password) {
+          const dbUrl = configService.get<string>("DATABASE_URL");
+          if (dbUrl) {
+            try {
+              const regex = /postgres:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/;
+              const match = dbUrl.match(regex);
+              if (match) {
+                username = match[1];
+                password = match[2];
+                host = match[3];
+                port = parseInt(match[4]);
+                database = match[5];
+              }
+            } catch (e) {
+              console.error("Error parsing DATABASE_URL:", e);
             }
-          } catch (e) {
-            console.error("Error parsing DATABASE_URL:", e);
           }
         }
+
+        // Default qiymatlar
+        host = host || "localhost";
+        port = port || 5432;
+        username = username || "postgres";
+        password = password || "";
+        database = database || "tavba";
+
+        console.log(`Database connecting to: ${host}:${port}/${database}`);
 
         return {
           type: "postgres",
