@@ -751,7 +751,7 @@ export class TelegramService {
    */
   generateMiniAppLink(startParam?: string) {
     const botUsername =
-      this.configService.get("TELEGRAM_BOT_USERNAME") || "Bilimdon_aibot";
+      this.configService.get("TELEGRAM_BOT_USERNAME") || "allohga_qayting_bot";
 
     let link = `https://t.me/${botUsername}/app`;
 

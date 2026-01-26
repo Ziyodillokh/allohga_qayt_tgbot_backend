@@ -1,7 +1,7 @@
 {
-  "name": "bilimdon-backend",
+  "name": "tavba-backend",
   "version": "1.0.0",
-  "description": "Bilimdon - Educational Platform Backend",
+  "description": "Tavba - Islomiy Bilimlar Platformasi Backend",
   "author": "Bekmuhammad",
   "private": true,
   "license": "MIT",
