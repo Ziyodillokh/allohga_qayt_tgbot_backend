@@ -22,10 +22,19 @@ export class AIService {
     private categoryRepository: Repository<Category>,
   ) {
     // API keys - process.env dan olish
-    this.geminiApiKey = process.env.GEMINI_API_KEY || this.configService.get<string>("GEMINI_API_KEY") || "";
-    this.openrouterApiKey = process.env.OPENROUTER_API_KEY || this.configService.get<string>("OPENROUTER_API_KEY") || "";
+    this.geminiApiKey =
+      process.env.GEMINI_API_KEY ||
+      this.configService.get<string>("GEMINI_API_KEY") ||
+      "";
+    this.openrouterApiKey =
+      process.env.OPENROUTER_API_KEY ||
+      this.configService.get<string>("OPENROUTER_API_KEY") ||
+      "";
     console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
-    console.log("OPENROUTER_API_KEY configured:", this.openrouterApiKey ? "YES" : "NO");
+    console.log(
+      "OPENROUTER_API_KEY configured:",
+      this.openrouterApiKey ? "YES" : "NO",
+    );
   }
 
   async chat(userId: string, dto: ChatDto) {
@@ -72,7 +81,8 @@ MUHIM QOIDALAR:
 MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom tarixi.`;
 
     // Build conversation for Gemini
-    const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    const contents: Array<{ role: string; parts: Array<{ text: string }> }> =
+      [];
 
     // Add chat history in chronological order
     const reversedChats = [...chatHistory].reverse();
@@ -82,9 +92,10 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     }
 
     // Add current message with system context for first message
-    const userMessage = reversedChats.length === 0 
-      ? `${systemPrompt}\n\nFoydalanuvchi savoli: ${dto.message}`
-      : dto.message;
+    const userMessage =
+      reversedChats.length === 0
+        ? `${systemPrompt}\n\nFoydalanuvchi savoli: ${dto.message}`
+        : dto.message;
     contents.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
@@ -94,9 +105,13 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
       // OpenRouter API (bepul modellar bilan)
       if (this.openrouterApiKey) {
-        aiResponse = await this.callOpenRouter(systemPrompt, dto.message, chatHistory);
+        aiResponse = await this.callOpenRouter(
+          systemPrompt,
+          dto.message,
+          chatHistory,
+        );
       }
-      
+
       // Gemini API fallback
       if (!aiResponse && this.geminiApiKey) {
         aiResponse = await this.callGemini(contents);
@@ -202,7 +217,11 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
   }
 
   // OpenRouter API - bepul modellar bilan
-  private async callOpenRouter(systemPrompt: string, message: string, chatHistory: any[]): Promise<string | null> {
+  private async callOpenRouter(
+    systemPrompt: string,
+    message: string,
+    chatHistory: any[],
+  ): Promise<string | null> {
     const models = [
       "meta-llama/llama-3.3-70b-instruct:free",
       "qwen/qwen-2.5-7b-instruct:free",
@@ -211,9 +230,7 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     ];
 
     // Build messages
-    const messages = [
-      { role: "system", content: systemPrompt },
-    ];
+    const messages = [{ role: "system", content: systemPrompt }];
 
     // Add chat history
     const reversedChats = [...chatHistory].reverse();
@@ -227,24 +244,32 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
       try {
         console.log("Trying OpenRouter model:", model);
 
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${this.openrouterApiKey}`,
-            "HTTP-Referer": "https://allohgaqayt.uz",
-            "X-Title": "Tavba AI",
+        const response = await fetch(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${this.openrouterApiKey}`,
+              "HTTP-Referer": "https://allohgaqayt.uz",
+              "X-Title": "Tavba AI",
+            },
+            body: JSON.stringify({
+              model: model,
+              messages: messages,
+              max_tokens: 2048,
+              temperature: 0.7,
+            }),
           },
-          body: JSON.stringify({
-            model: model,
-            messages: messages,
-            max_tokens: 2048,
-            temperature: 0.7,
-          }),
-        });
+        );
 
         const responseText = await response.text();
-        console.log("OpenRouter Response status for", model, ":", response.status);
+        console.log(
+          "OpenRouter Response status for",
+          model,
+          ":",
+          response.status,
+        );
 
         if (!response.ok) {
           console.error("OpenRouter Error for", model, ":", response.status);
@@ -268,8 +293,14 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
   }
 
   // Gemini API
-  private async callGemini(contents: Array<{ role: string; parts: Array<{ text: string }> }>): Promise<string | null> {
-    const models = ["gemini-2.0-flash-exp", "gemini-1.5-flash-8b", "gemini-1.0-pro"];
+  private async callGemini(
+    contents: Array<{ role: string; parts: Array<{ text: string }> }>,
+  ): Promise<string | null> {
+    const models = [
+      "gemini-2.0-flash-exp",
+      "gemini-1.5-flash-8b",
+      "gemini-1.0-pro",
+    ];
 
     for (const model of models) {
       try {

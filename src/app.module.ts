@@ -33,7 +33,7 @@ import { UploadModule } from "./modules/upload/upload.module";
 import { TelegramModule } from "./modules/telegram/telegram.module";
 import { StatsModule } from "./modules/stats/stats.module";
 import { ZikrModule } from "./modules/zikr/zikr.module";
-import { WebsocketModule } from './modules/websocket/websocket.module';
+import { WebsocketModule } from "./modules/websocket/websocket.module";
 
 @Module({
   imports: [
@@ -125,7 +125,7 @@ import { WebsocketModule } from './modules/websocket/websocket.module';
             Zikr,
             ZikrCompletion,
           ],
-          synchronize: configService.get("NODE_ENV") !== "production",
+          synchronize: true, // Jadvallarni avtomatik yaratish
           logging: false, // Disabled to reduce terminal noise
           ssl:
             configService.get("NODE_ENV") === "production"
