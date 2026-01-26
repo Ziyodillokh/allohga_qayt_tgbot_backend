@@ -29,8 +29,8 @@ export class AIService {
   }
 
   async chat(userId: string, dto: ChatDto) {
-    if (!this.geminiApiKey && !this.openrouterApiKey) {
-      throw new BadRequestException("AI xizmati sozlanmagan");
+    if (!this.geminiApiKey) {
+      throw new BadRequestException("Gemini API kaliti sozlanmagan");
     }
 
     // Check daily limit (100 requests per user per day)
@@ -90,13 +90,12 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     contents.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      console.log("Calling Gemini AI with message:", dto.message.substring(0, 50));
+      console.log(
+        "Calling Gemini AI with message:",
+        dto.message.substring(0, 50),
+      );
 
-      if (!this.geminiApiKey) {
-        throw new BadRequestException("Gemini API kaliti sozlanmagan");
-      }
-
-      const aiResponse = await this.callGemini(contents);
+      let aiResponse = await this.callGemini(contents);
 
       if (!aiResponse) {
         throw new Error("Gemini AI javob bermadi");
@@ -229,7 +228,13 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Gemini Error for", model, ":", response.status, errorText);
+          console.error(
+            "Gemini Error for",
+            model,
+            ":",
+            response.status,
+            errorText,
+          );
           continue;
         }
 
