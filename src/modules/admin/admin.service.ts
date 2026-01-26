@@ -764,10 +764,12 @@ export class AdminService {
       `,
         [weekAgo],
       ),
-      this.zikrCompletionRepository
-        .createQueryBuilder("zc")
-        .select("SUM(zc.xpEarned)", "sum")
-        .getRawOne(),
+      // Total XP earned from zikr (calculated from zikr.xpReward * completions count)
+      this.dataSource.query(`
+        SELECT COALESCE(SUM(z."xpReward"), 0)::int as sum
+        FROM "zikr_completions" zc
+        INNER JOIN "zikrs" z ON z.id = zc."zikrId"
+      `),
     ]);
 
     // Top zikrs by completions
@@ -899,7 +901,7 @@ export class AdminService {
           today: todayZikrCompletionsResult?.[0]?.total || 0,
           thisWeek: weekZikrCompletionsResult?.[0]?.total || 0,
         },
-        totalXpEarned: parseInt(totalZikrXpEarnedResult?.sum) || 0,
+        totalXpEarned: parseInt(totalZikrXpEarnedResult?.[0]?.sum) || 0,
         topZikrs: topZikrs.map((z) => ({
           id: z.z_id,
           title: z.z_titleLatin,

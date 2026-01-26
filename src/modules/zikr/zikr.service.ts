@@ -330,9 +330,11 @@ export class ZikrService {
       where: { userId },
     });
 
+    // Total XP earned from zikr completions (join with zikrs to get xpReward)
     const totalXpEarned = await this.zikrCompletionRepository
       .createQueryBuilder("completion")
-      .select("SUM(completion.xpEarned)", "sum")
+      .innerJoin("completion.zikr", "zikr")
+      .select("COALESCE(SUM(zikr.xpReward), 0)", "sum")
       .where("completion.userId = :userId", { userId })
       .getRawOne();
 
