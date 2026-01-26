@@ -397,6 +397,28 @@ INSERT INTO "achievements" ("name", "description", "icon", "condition", "xpRewar
 ('1000 XP', '1000 XP to''plang', '🏆', '{"type": "total_xp", "value": 1000}', 100, 5);
 
 -- =====================================================
+-- ADMIN USER - O'ZGARTIRING!
+-- Password: admin123 (bcrypt hash)
+-- Username: admin
+-- =====================================================
+INSERT INTO "users" (
+    "email", 
+    "username", 
+    "password", 
+    "fullName", 
+    "role", 
+    "isActive"
+) VALUES (
+    'admin@allohgaqayt.uz',
+    'admin',
+    '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/RK.s5uO.G', -- admin123
+    'Administrator',
+    'ADMIN',
+    true
+);
+
+-- =====================================================
 -- DONE!
 -- =====================================================
 SELECT 'Migration completed successfully!' as status;
+SELECT 'Admin user created: username=admin, password=admin123' as info;

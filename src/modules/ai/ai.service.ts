@@ -10,7 +10,6 @@ import { ChatDto } from "./dto/chat.dto";
 @Injectable()
 export class AIService {
   private geminiApiKey: string;
-  private openrouterApiKey: string;
 
   constructor(
     private configService: ConfigService,
@@ -21,20 +20,12 @@ export class AIService {
     @InjectRepository(Category)
     private categoryRepository: Repository<Category>,
   ) {
-    // API keys - process.env dan olish
+    // Gemini API key
     this.geminiApiKey =
       process.env.GEMINI_API_KEY ||
       this.configService.get<string>("GEMINI_API_KEY") ||
       "";
-    this.openrouterApiKey =
-      process.env.OPENROUTER_API_KEY ||
-      this.configService.get<string>("OPENROUTER_API_KEY") ||
-      "";
     console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
-    console.log(
-      "OPENROUTER_API_KEY configured:",
-      this.openrouterApiKey ? "YES" : "NO",
-    );
   }
 
   async chat(userId: string, dto: ChatDto) {
@@ -99,26 +90,16 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     contents.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      console.log("Calling AI API with message:", dto.message.substring(0, 50));
+      console.log("Calling Gemini AI with message:", dto.message.substring(0, 50));
 
-      let aiResponse: string | null = null;
-
-      // Gemini API (asosiy)
-      if (this.geminiApiKey) {
-        aiResponse = await this.callGemini(contents);
+      if (!this.geminiApiKey) {
+        throw new BadRequestException("Gemini API kaliti sozlanmagan");
       }
 
-      // OpenRouter API fallback (bepul modellar bilan)
-      if (!aiResponse && this.openrouterApiKey) {
-        aiResponse = await this.callOpenRouter(
-          systemPrompt,
-          dto.message,
-          chatHistory,
-        );
-      }
+      const aiResponse = await this.callGemini(contents);
 
       if (!aiResponse) {
-        throw new Error("All AI providers failed");
+        throw new Error("Gemini AI javob bermadi");
       }
 
       console.log("AI response received successfully");
@@ -216,87 +197,11 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     };
   }
 
-  // OpenRouter API - bepul modellar bilan
-  private async callOpenRouter(
-    systemPrompt: string,
-    message: string,
-    chatHistory: any[],
-  ): Promise<string | null> {
-    const models = [
-      "meta-llama/llama-3.3-70b-instruct:free",
-      "qwen/qwen-2.5-7b-instruct:free",
-      "google/gemma-2-9b-it:free",
-      "mistralai/mistral-7b-instruct:free",
-    ];
-
-    // Build messages
-    const messages = [{ role: "system", content: systemPrompt }];
-
-    // Add chat history
-    const reversedChats = [...chatHistory].reverse();
-    for (const chat of reversedChats) {
-      messages.push({ role: "user", content: chat.message });
-      messages.push({ role: "assistant", content: chat.response });
-    }
-    messages.push({ role: "user", content: message });
-
-    for (const model of models) {
-      try {
-        console.log("Trying OpenRouter model:", model);
-
-        const response = await fetch(
-          "https://openrouter.ai/api/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${this.openrouterApiKey}`,
-              "HTTP-Referer": "https://allohgaqayt.uz",
-              "X-Title": "Tavba AI",
-            },
-            body: JSON.stringify({
-              model: model,
-              messages: messages,
-              max_tokens: 2048,
-              temperature: 0.7,
-            }),
-          },
-        );
-
-        const responseText = await response.text();
-        console.log(
-          "OpenRouter Response status for",
-          model,
-          ":",
-          response.status,
-        );
-
-        if (!response.ok) {
-          console.error("OpenRouter Error for", model, ":", response.status);
-          continue;
-        }
-
-        const data = JSON.parse(responseText);
-        const aiResponse = data.choices?.[0]?.message?.content;
-
-        if (aiResponse) {
-          console.log("Success with OpenRouter model:", model);
-          return aiResponse;
-        }
-      } catch (error) {
-        console.error("Error with OpenRouter model", model, ":", error);
-        continue;
-      }
-    }
-
-    return null;
-  }
-
-  // Gemini API
+  // Gemini API - asosiy va yagona AI provider
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
   ): Promise<string | null> {
-    // Gemini 1.5 Flash - eng yaxshi bepul model
+    // Gemini modellar - tezlik va sifat bo'yicha tartiblangan
     const models = [
       "gemini-1.5-flash",
       "gemini-1.5-flash-latest",
@@ -323,7 +228,8 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
         );
 
         if (!response.ok) {
-          console.error("Gemini Error for", model, ":", response.status);
+          const errorText = await response.text();
+          console.error("Gemini Error for", model, ":", response.status, errorText);
           continue;
         }
 
