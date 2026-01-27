@@ -6,10 +6,12 @@ import { AIChat } from "./entities";
 import { User } from "../users/entities";
 import { Category } from "../categories/entities";
 import { ChatDto } from "./dto/chat.dto";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 @Injectable()
 export class AIService {
   private geminiApiKey: string;
+  private genAI: GoogleGenerativeAI | null = null;
 
   constructor(
     private configService: ConfigService,
@@ -26,6 +28,10 @@ export class AIService {
       this.configService.get<string>("GEMINI_API_KEY") ||
       "";
     console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
+    
+    if (this.geminiApiKey) {
+      this.genAI = new GoogleGenerativeAI(this.geminiApiKey);
+    }
   }
 
   async chat(userId: string, dto: ChatDto) {
@@ -196,57 +202,68 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     };
   }
 
-  // Gemini API - asosiy va yagona AI provider
+  // Gemini API - @google/generative-ai SDK orqali
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
   ): Promise<string | null> {
-    // Gemini modellar - eng yangi model nomlari (2026 dokumentatsiya asosida)
-    const models = [
-      "gemini-2.5-flash-preview-05-20",
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-    ];
+    if (!this.genAI) {
+      console.error("Gemini API not initialized");
+      return null;
+    }
 
-    for (const model of models) {
+    // Gemini modellar - tezkor va bepul (2026)
+    const models = ["gemini-2.0-flash", "gemini-1.5-flash"];
+
+    for (const modelName of models) {
       try {
-        console.log("Trying Gemini model:", model);
+        console.log("Trying Gemini model:", modelName);
 
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.geminiApiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: contents,
-              generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 2048,
-              },
-            }),
-          },
-        );
+        const model = this.genAI.getGenerativeModel({ model: modelName });
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(
-            "Gemini Error for",
-            model,
-            ":",
-            response.status,
-            errorText,
-          );
+        // Chat history formatini SDK formatiga o'tkazish
+        const history = contents.slice(0, -1).map((c) => ({
+          role: c.role === "model" ? "model" : "user",
+          parts: c.parts,
+        }));
+
+        const lastMessage = contents[contents.length - 1];
+
+        // Agar history bo'lsa chat ishlatamiz, bo'lmasa oddiy generateContent
+        let result;
+        if (history.length > 0) {
+          const chat = model.startChat({
+            history: history as any,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 2048,
+            },
+          });
+          result = await chat.sendMessage(lastMessage.parts[0].text);
+        } else {
+          result = await model.generateContent({
+            contents: contents as any,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 2048,
+            },
+          });
+        }
+
+        const response = result.response;
+        const text = response.text();
+
+        if (text) {
+          console.log("Success with Gemini model:", modelName);
+          return text;
+        }
+      } catch (error: any) {
+        console.error("Error with Gemini model", modelName, ":", error.message);
+        // Rate limit xatosi bo'lsa, keyingi modelga o'tish
+        if (error.message?.includes("429") || error.message?.includes("quota")) {
+          console.log("Rate limit hit, trying next model...");
           continue;
         }
-
-        const data = await response.json();
-        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (aiResponse) {
-          console.log("Success with Gemini model:", model);
-          return aiResponse;
-        }
-      } catch (error) {
-        console.error("Error with Gemini model", model, ":", error);
+        // Boshqa xato bo'lsa ham keyingi modelni sinash
         continue;
       }
     }
