@@ -529,7 +529,47 @@ export class TelegramService {
       throw new BadRequestException(`Telegram API error: ${data.description}`);
     }
 
+    // Bot description va short description'ni ham yangilaymiz
+    await this.setBotDescriptions();
+
     return data.result;
+  }
+
+  /**
+   * Set bot description and short description
+   */
+  async setBotDescriptions() {
+    if (!this.botToken) return;
+
+    const description = 
+      "📖 TAVBA - Islomiy bilim platformasi\n\n" +
+      "✅ Qur'on, Hadis, Fiqh, Aqida testlari\n" +
+      "🤖 AI yordamchi - islomiy savollarga javob\n" +
+      "📿 Zikr va duo to'plamlari\n" +
+      "🏆 Reyting va yutuqlar tizimi\n\n" +
+      "Bilimingizni sinab, savob qozoning!";
+
+    const shortDescription = "📖 Islomiy testlar, AI yordamchi, zikrlar va duolar - Tavba platformasi";
+
+    try {
+      // Set description (512 character limit)
+      await fetch(`https://api.telegram.org/bot${this.botToken}/setMyDescription`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+
+      // Set short description (120 character limit)
+      await fetch(`https://api.telegram.org/bot${this.botToken}/setMyShortDescription`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ short_description: shortDescription }),
+      });
+
+      console.log("[TELEGRAM] Bot descriptions updated successfully");
+    } catch (error) {
+      console.error("[TELEGRAM] Failed to update bot descriptions:", error);
+    }
   }
 
   /**
@@ -556,18 +596,20 @@ export class TelegramService {
 
         console.log("[TELEGRAM] User saved, sending message...");
 
-        // For localhost, send without web app button (Telegram doesn't allow http://localhost)
-        // TODO: Add web app button when deployed to HTTPS domain
+        // Professional welcome message for Tavba platform
+        const webappUrl = this.configService.get("WEBAPP_URL");
+        
         const messageText =
           `Assalomu alaykum, ${firstName}! 👋\n\n` +
-          `<b>Allohga Qayting</b> - Islomiy platformaga xush kelibsiz! 🕌\n\n` +
-          `✨ Bu yerda siz:\n` +
-          `📖 Islomiy fanlardan testlar topshirishingiz\n` +
-          `💡 Bilimingizni sinashingiz\n` +
-          `🏆 Reyting jadvalida o'z o'rningizni ko'rishingiz mumkin!\n\n` +
-          `🚀 <b>Platform:</b> http://localhost:3000`;
-
-        const webappUrl = this.configService.get("WEBAPP_URL");
+          `🕌 <b>TAVBA</b> - Islomiy bilim platformasiga xush kelibsiz!\n\n` +
+          `📚 <b>Platformada:</b>\n` +
+          `• Qur'on, Hadis, Fiqh, Aqida bo'yicha testlar\n` +
+          `• 🤖 AI yordamchi - islomiy savollarga javob\n` +
+          `• 📿 Zikr va duo to'plamlari\n` +
+          `• 🏆 Reyting va yutuqlar tizimi\n` +
+          `• 📊 Shaxsiy statistika va taraqqiyot\n\n` +
+          `✨ Bilimingizni sinab, savob qozoning!\n\n` +
+          `👇 Boshlash uchun tugmani bosing:`;
 
         // Only send web app button if URL starts with https:// (production)
         if (webappUrl && webappUrl.startsWith("https://")) {
@@ -577,7 +619,7 @@ export class TelegramService {
               inline_keyboard: [
                 [
                   {
-                    text: "🕌 Platformani ochish",
+                    text: "� Tavba platformasini ochish",
                     web_app: {
                       url: webappUrl,
                     },
@@ -588,7 +630,8 @@ export class TelegramService {
           });
         } else {
           // For localhost/development - send without button
-          await this.sendMessage(chatId, messageText, {
+          const devMessage = messageText.replace("👇 Boshlash uchun tugmani bosing:", `🔗 Platform: ${webappUrl || "http://localhost:3000"}`);
+          await this.sendMessage(chatId, devMessage, {
             parse_mode: "HTML",
           });
         }

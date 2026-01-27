@@ -112,4 +112,11 @@ export class TelegramController {
   getMiniAppLinkWithParam(@Param("startParam") startParam: string) {
     return { link: this.telegramService.generateMiniAppLink(startParam) };
   }
+
+  @Post("update-descriptions")
+  @ApiOperation({ summary: "Update bot description and short description" })
+  async updateBotDescriptions() {
+    await this.telegramService.setBotDescriptions();
+    return { success: true, message: "Bot descriptions updated" };
+  }
 }

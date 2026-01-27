@@ -59,7 +59,7 @@ export class AIService {
     // Agar audio bo'lsa, uni transcribe qilish
     let messageText = dto.message;
     let isAudioMessage = false;
-    
+
     if (dto.audioBase64 && dto.audioBase64.length > 100) {
       isAudioMessage = true;
       try {
@@ -307,11 +307,21 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     }
 
     try {
-      console.log("Transcribing audio with Gemini, data length:", audioBase64.length);
+      console.log(
+        "Transcribing audio with Gemini, data length:",
+        audioBase64.length,
+      );
 
       // Gemini 1.5 Flash audio transcription uchun yaxshiroq
-      const mimeTypes = ["audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"];
-      
+      const mimeTypes = [
+        "audio/webm",
+        "audio/webm;codecs=opus",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/ogg",
+      ];
+
       for (const mimeType of mimeTypes) {
         try {
           const response = await this.ai.models.generateContent({
@@ -340,11 +350,21 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
           const transcribedText = response.text;
           if (transcribedText && transcribedText.trim().length > 0) {
-            console.log("Audio transcribed successfully with", mimeType, ":", transcribedText.substring(0, 100));
+            console.log(
+              "Audio transcribed successfully with",
+              mimeType,
+              ":",
+              transcribedText.substring(0, 100),
+            );
             return transcribedText.trim();
           }
         } catch (err: any) {
-          console.log("Failed with mimeType", mimeType, ":", err.message?.substring(0, 100));
+          console.log(
+            "Failed with mimeType",
+            mimeType,
+            ":",
+            err.message?.substring(0, 100),
+          );
           continue;
         }
       }
