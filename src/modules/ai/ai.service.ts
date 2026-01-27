@@ -12,7 +12,7 @@ import { GoogleGenAI } from "@google/genai";
 export class AIService {
   // Multiple API keys for rotation
   private apiKeys: string[] = [];
-  private currentKeyIndex: number = 0;
+  private currentKeyIndex: number = 1; // Key #1 limiti tugadi, #2 dan boshlaymiz
   private aiInstances: Map<number, GoogleGenAI> = new Map();
 
   constructor(
@@ -274,6 +274,7 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
   ): Promise<string | null> {
     // 2026 yangi Gemini modellar
     const models = [
+      "gemini-3-flash-preview",
       "gemini-2.5-flash-preview-05-20", // Eng yangi 2.5 flash
       "gemini-2.0-flash", // Barqaror flash
       "gemini-2.5-pro-preview-05-06", // Pro preview
