@@ -6,12 +6,12 @@ import { AIChat } from "./entities";
 import { User } from "../users/entities";
 import { Category } from "../categories/entities";
 import { ChatDto } from "./dto/chat.dto";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 @Injectable()
 export class AIService {
   private geminiApiKey: string;
-  private genAI: GoogleGenerativeAI | null = null;
+  private ai: GoogleGenAI | null = null;
 
   constructor(
     private configService: ConfigService,
@@ -30,7 +30,7 @@ export class AIService {
     console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
     
     if (this.geminiApiKey) {
-      this.genAI = new GoogleGenerativeAI(this.geminiApiKey);
+      this.ai = new GoogleGenAI({ apiKey: this.geminiApiKey });
     }
   }
 
@@ -202,55 +202,39 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     };
   }
 
-  // Gemini API - @google/generative-ai SDK orqali
+  // Gemini API - @google/genai SDK orqali (2026 yangi API)
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
   ): Promise<string | null> {
-    if (!this.genAI) {
+    if (!this.ai) {
       console.error("Gemini API not initialized");
       return null;
     }
 
-    // Gemini modellar - tezkor va bepul (2026)
-    const models = ["gemini-2.0-flash", "gemini-1.5-flash"];
+    // Gemini modellar - eng yangilari (2026)
+    const models = ["gemini-2.0-flash-001", "gemini-2.0-flash", "gemini-1.5-flash"];
 
     for (const modelName of models) {
       try {
         console.log("Trying Gemini model:", modelName);
 
-        const model = this.genAI.getGenerativeModel({ model: modelName });
-
-        // Chat history formatini SDK formatiga o'tkazish
-        const history = contents.slice(0, -1).map((c) => ({
+        // Yangi @google/genai SDK formatida
+        // Contentlarni to'g'ri formatga o'tkazish
+        const formattedContents = contents.map((c) => ({
           role: c.role === "model" ? "model" : "user",
-          parts: c.parts,
+          parts: c.parts.map((p) => ({ text: p.text })),
         }));
 
-        const lastMessage = contents[contents.length - 1];
+        const response = await this.ai.models.generateContent({
+          model: modelName,
+          contents: formattedContents as any,
+          config: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
+          },
+        });
 
-        // Agar history bo'lsa chat ishlatamiz, bo'lmasa oddiy generateContent
-        let result;
-        if (history.length > 0) {
-          const chat = model.startChat({
-            history: history as any,
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 2048,
-            },
-          });
-          result = await chat.sendMessage(lastMessage.parts[0].text);
-        } else {
-          result = await model.generateContent({
-            contents: contents as any,
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 2048,
-            },
-          });
-        }
-
-        const response = result.response;
-        const text = response.text();
+        const text = response.text;
 
         if (text) {
           console.log("Success with Gemini model:", modelName);
@@ -259,8 +243,13 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
       } catch (error: any) {
         console.error("Error with Gemini model", modelName, ":", error.message);
         // Rate limit xatosi bo'lsa, keyingi modelga o'tish
-        if (error.message?.includes("429") || error.message?.includes("quota")) {
+        if (error.message?.includes("429") || error.message?.includes("quota") || error.message?.includes("RESOURCE_EXHAUSTED")) {
           console.log("Rate limit hit, trying next model...");
+          continue;
+        }
+        // 404 xatosi - model topilmadi
+        if (error.message?.includes("404") || error.message?.includes("NOT_FOUND")) {
+          console.log("Model not found, trying next...");
           continue;
         }
         // Boshqa xato bo'lsa ham keyingi modelni sinash
