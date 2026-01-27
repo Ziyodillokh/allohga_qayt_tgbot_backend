@@ -211,8 +211,11 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
       return null;
     }
 
-    // Gemini modellar - eng yangilari (2026)
-    const models = ["gemini-2.0-flash-001", "gemini-2.0-flash", "gemini-1.5-flash"];
+    // Gemini modellar - 2026 dokumentatsiya asosida (eng yangidan eskiga)
+    const models = [
+      "gemini-2.5-flash",      // Barqaror va tez
+      "gemini-2.0-flash",      // Eski barqaror
+    ];
 
     for (const modelName of models) {
       try {
