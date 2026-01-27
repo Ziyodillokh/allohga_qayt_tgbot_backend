@@ -200,11 +200,11 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
   ): Promise<string | null> {
-    // Gemini modellar - yangi v2 API model nomlari (2025-2026)
+    // Gemini modellar - eng yangi model nomlari (2026 dokumentatsiya asosida)
     const models = [
+      "gemini-2.5-flash-preview-05-20",
       "gemini-2.0-flash",
-      "gemini-2.0-flash-exp",
-      "gemini-1.5-flash-8b",
+      "gemini-2.0-flash-lite",
     ];
 
     for (const model of models) {
