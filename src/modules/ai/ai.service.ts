@@ -28,7 +28,7 @@ export class AIService {
       this.configService.get<string>("GEMINI_API_KEY") ||
       "";
     console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
-    
+
     if (this.geminiApiKey) {
       this.ai = new GoogleGenAI({ apiKey: this.geminiApiKey });
     }
@@ -214,8 +214,8 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     // Gemini modellar - 2026 dokumentatsiya asosida (eng yangidan eskiga)
     const models = [
       "gemini-3-flash-preview", // Eng yangi preview (bepul)
-      "gemini-2.5-flash",       // Barqaror va tez
-      "gemini-2.0-flash",       // Eski barqaror
+      "gemini-2.5-flash", // Barqaror va tez
+      "gemini-2.0-flash", // Eski barqaror
     ];
 
     for (const modelName of models) {
@@ -247,12 +247,19 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
       } catch (error: any) {
         console.error("Error with Gemini model", modelName, ":", error.message);
         // Rate limit xatosi bo'lsa, keyingi modelga o'tish
-        if (error.message?.includes("429") || error.message?.includes("quota") || error.message?.includes("RESOURCE_EXHAUSTED")) {
+        if (
+          error.message?.includes("429") ||
+          error.message?.includes("quota") ||
+          error.message?.includes("RESOURCE_EXHAUSTED")
+        ) {
           console.log("Rate limit hit, trying next model...");
           continue;
         }
         // 404 xatosi - model topilmadi
-        if (error.message?.includes("404") || error.message?.includes("NOT_FOUND")) {
+        if (
+          error.message?.includes("404") ||
+          error.message?.includes("NOT_FOUND")
+        ) {
           console.log("Model not found, trying next...");
           continue;
         }

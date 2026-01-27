@@ -141,6 +141,75 @@ export class UsersService {
     };
   }
 
+  // Foydalanuvchining to'liq statistikasi (profil sahifasi uchun)
+  async getMyStats(userId: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException("Foydalanuvchi topilmadi");
+    }
+
+    // Test statistikasi
+    const testStats = await this.testAttemptRepository
+      .createQueryBuilder("ta")
+      .select("COUNT(*)", "totalTests")
+      .addSelect("SUM(ta.correctAnswers)", "totalCorrect")
+      .addSelect("SUM(ta.totalQuestions - ta.correctAnswers)", "totalWrong")
+      .addSelect("SUM(ta.totalQuestions)", "totalQuestions")
+      .addSelect("AVG(ta.score)", "averageScore")
+      .addSelect("MAX(ta.score)", "bestScore")
+      .where("ta.userId = :userId", { userId })
+      .andWhere("ta.completedAt IS NOT NULL")
+      .getRawOne();
+
+    // Haftalik XP
+    const weekStart = this.getWeekStart(new Date());
+    const weeklyXP = await this.weeklyXPRepository.findOne({
+      where: { userId, weekStart },
+    });
+
+    // Oylik XP
+    const monthStart = this.getMonthStart(new Date());
+    const monthlyXP = await this.monthlyXPRepository.findOne({
+      where: { userId, monthStart },
+    });
+
+    // Level progress
+    const xpForCurrentLevel = this.LEVEL_THRESHOLDS[user.level - 1] || 0;
+    const xpForNextLevel = this.getXPForNextLevel(user.level);
+    const xpProgress = user.totalXP - xpForCurrentLevel;
+    const xpNeeded = xpForNextLevel - xpForCurrentLevel;
+
+    return {
+      // Asosiy
+      totalXP: user.totalXP,
+      level: user.level,
+      levelProgress: Math.round((xpProgress / xpNeeded) * 100),
+      xpToNextLevel: xpNeeded - xpProgress,
+
+      // Zikr
+      totalZikr: user.zikrCount || 0,
+
+      // Test
+      totalTests: parseInt(testStats?.totalTests) || 0,
+      totalCorrect: parseInt(testStats?.totalCorrect) || 0,
+      totalWrong: parseInt(testStats?.totalWrong) || 0,
+      totalQuestions: parseInt(testStats?.totalQuestions) || 0,
+      averageScore: Math.round(parseFloat(testStats?.averageScore) || 0),
+      bestScore: parseInt(testStats?.bestScore) || 0,
+
+      // Vaqt asosida
+      weeklyXP: weeklyXP?.xp || 0,
+      monthlyXP: monthlyXP?.xp || 0,
+
+      // Qo'shimcha
+      testsCompleted: user.testsCompleted || 0,
+      memberSince: user.createdAt,
+    };
+  }
+
   async updateProfile(userId: string, dto: UpdateUserDto) {
     if (dto.username) {
       const existingUser = await this.userRepository.findOne({
