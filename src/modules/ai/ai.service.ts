@@ -56,6 +56,30 @@ export class AIService {
       );
     }
 
+    // Agar audio bo'lsa, uni transcribe qilish
+    let messageText = dto.message;
+    let isAudioMessage = false;
+    
+    if (dto.audioBase64 && dto.audioBase64.length > 100) {
+      isAudioMessage = true;
+      try {
+        console.log("Audio received, length:", dto.audioBase64.length);
+        const transcribedText = await this.transcribeAudio(dto.audioBase64);
+        if (transcribedText && transcribedText !== "Ovozli xabar tushunarsiz") {
+          messageText = transcribedText;
+          console.log("Audio transcribed:", transcribedText.substring(0, 100));
+        } else {
+          // Agar transcribe bo'lmasa, umumiy savol qilamiz
+          messageText = "Assalomu alaykum, menga islomiy mavzuda yordam bering";
+          console.log("Audio transcription failed, using default message");
+        }
+      } catch (error: any) {
+        console.error("Audio transcription error:", error.message);
+        // Xatolik bo'lsa, umumiy savol qilamiz
+        messageText = "Assalomu alaykum, menga islomiy mavzuda yordam bering";
+      }
+    }
+
     // Get chat history for context
     const chatHistory = await this.aiChatRepository.find({
       where: { userId },
@@ -74,6 +98,10 @@ MUHIM QOIDALAR:
 4. Islomiy mavzularda Qur'on va hadis asosida javob ber
 5. Agar bilmasang "Bu haqida aniq ma'lumotim yo'q" de
 6. Hurmatli va muloyim tonda muloqot qil
+7. HECH QACHON "men ovozli xabarlarni tushunmayman" yoki "men matn asosidagi sun'iy intellektman" dema - foydalanuvchi savolini oddiy savol sifatida qabul qil va javob ber
+8. HECH QACHON "men rasm yarata olmayman" dema - agar foydalanuvchi rasm so'rasa, uning tasviri haqida batafsil yoz yoki internet URL berishga harakat qil
+9. Foydalanuvchi ovozli xabar yuborsa, u avtomatik matnga aylantirilgan - shuning uchun oddiy savol sifatida javob ber
+10. Bahona qilma, doim yordam berishga harakat qil
 
 MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom tarixi.`;
 
@@ -91,14 +119,14 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     // Add current message with system context for first message
     const userMessage =
       reversedChats.length === 0
-        ? `${systemPrompt}\n\nFoydalanuvchi savoli: ${dto.message}`
-        : dto.message;
+        ? `${systemPrompt}\n\nFoydalanuvchi savoli: ${messageText}`
+        : messageText;
     contents.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
       console.log(
         "Calling Gemini AI with message:",
-        dto.message.substring(0, 50),
+        messageText.substring(0, 50),
       );
 
       let aiResponse = await this.callGemini(contents);
@@ -129,7 +157,7 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
       const newChat = this.aiChatRepository.create({
         userId,
         categoryId,
-        message: dto.message,
+        message: messageText,
         response: aiResponse,
       });
       const savedChat = await this.aiChatRepository.save(newChat);
@@ -142,7 +170,7 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
       return {
         id: savedChat.id,
-        message: dto.message,
+        message: messageText,
         response: aiResponse,
         category: aiChat?.category || null,
         createdAt: savedChat.createdAt,
@@ -269,5 +297,62 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     }
 
     return null;
+  }
+
+  // Audio transcription - Gemini orqali
+  private async transcribeAudio(audioBase64: string): Promise<string | null> {
+    if (!this.ai) {
+      console.error("Gemini API not initialized for audio transcription");
+      return null;
+    }
+
+    try {
+      console.log("Transcribing audio with Gemini, data length:", audioBase64.length);
+
+      // Gemini 1.5 Flash audio transcription uchun yaxshiroq
+      const mimeTypes = ["audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"];
+      
+      for (const mimeType of mimeTypes) {
+        try {
+          const response = await this.ai.models.generateContent({
+            model: "gemini-1.5-flash",
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: mimeType,
+                      data: audioBase64,
+                    },
+                  },
+                  {
+                    text: "Bu audio yozuvni diqqat bilan tingla va aytilgan so'zlarni aniq transkripsiya qil. FAQAT aytilgan so'zlarni yoz, hech qanday izoh yoki tushuntirish qo'shma. Agar o'zbek tilida gapirilsa, o'zbek tilida yoz. Agar boshqa tilda gapirilsa, o'sha tilda yoz.",
+                  },
+                ],
+              },
+            ],
+            config: {
+              temperature: 0,
+              maxOutputTokens: 2048,
+            },
+          });
+
+          const transcribedText = response.text;
+          if (transcribedText && transcribedText.trim().length > 0) {
+            console.log("Audio transcribed successfully with", mimeType, ":", transcribedText.substring(0, 100));
+            return transcribedText.trim();
+          }
+        } catch (err: any) {
+          console.log("Failed with mimeType", mimeType, ":", err.message?.substring(0, 100));
+          continue;
+        }
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error("Audio transcription error:", error.message);
+      return null;
+    }
   }
 }
