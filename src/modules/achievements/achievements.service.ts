@@ -63,6 +63,36 @@ export class AchievementsService {
     };
   }
 
+  async getAllAchievements(userId: string) {
+    // Barcha faol yutuqlarni olish
+    const achievements = await this.achievementRepository.find({
+      where: { isActive: true },
+      order: { xpReward: "ASC" },
+    });
+
+    // Foydalanuvchi progressini olish
+    const userAchievements = await this.userAchievementRepository.find({
+      where: { userId },
+    });
+
+    const userProgressMap = new Map(
+      userAchievements.map((ua) => [ua.achievementId, ua]),
+    );
+
+    // Har bir yutuqqa progress qo'shish
+    const result = achievements.map((achievement) => {
+      const userProgress = userProgressMap.get(achievement.id);
+      return {
+        ...achievement,
+        progress: userProgress?.progress || 0,
+        unlockedAt: userProgress?.unlockedAt || null,
+        isUnlocked: !!userProgress?.unlockedAt,
+      };
+    });
+
+    return result;
+  }
+
   async checkAchievements(userId: string) {
     const achievements = await this.achievementRepository.find({
       where: { isActive: true },

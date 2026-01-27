@@ -10,8 +10,10 @@ import { GoogleGenAI } from "@google/genai";
 
 @Injectable()
 export class AIService {
-  private geminiApiKey: string;
-  private ai: GoogleGenAI | null = null;
+  // Multiple API keys for rotation
+  private apiKeys: string[] = [];
+  private currentKeyIndex: number = 0;
+  private aiInstances: Map<number, GoogleGenAI> = new Map();
 
   constructor(
     private configService: ConfigService,
@@ -22,20 +24,57 @@ export class AIService {
     @InjectRepository(Category)
     private categoryRepository: Repository<Category>,
   ) {
-    // Gemini API key
-    this.geminiApiKey =
-      process.env.GEMINI_API_KEY ||
-      this.configService.get<string>("GEMINI_API_KEY") ||
-      "";
-    console.log("GEMINI_API_KEY configured:", this.geminiApiKey ? "YES" : "NO");
+    // Load all Gemini API keys (GEMINI_API_KEY, GEMINI_API_KEY1, GEMINI_API_KEY2, etc.)
+    this.loadApiKeys();
+  }
 
-    if (this.geminiApiKey) {
-      this.ai = new GoogleGenAI({ apiKey: this.geminiApiKey });
+  private loadApiKeys() {
+    const keys: string[] = [];
+
+    // Main key
+    const mainKey =
+      process.env.GEMINI_API_KEY ||
+      this.configService.get<string>("GEMINI_API_KEY");
+    if (mainKey) keys.push(mainKey);
+
+    // Numbered keys (1-10)
+    for (let i = 1; i <= 10; i++) {
+      const key =
+        process.env[`GEMINI_API_KEY${i}`] ||
+        this.configService.get<string>(`GEMINI_API_KEY${i}`);
+      if (key) keys.push(key);
     }
+
+    this.apiKeys = keys;
+    console.log(`[GEMINI] Loaded ${this.apiKeys.length} API keys for rotation`);
+
+    // Create AI instances for each key
+    this.apiKeys.forEach((key, index) => {
+      this.aiInstances.set(index, new GoogleGenAI({ apiKey: key }));
+    });
+  }
+
+  private getCurrentAI(): GoogleGenAI | null {
+    return this.aiInstances.get(this.currentKeyIndex) || null;
+  }
+
+  private rotateToNextKey(): boolean {
+    const nextIndex = this.currentKeyIndex + 1;
+    if (nextIndex < this.apiKeys.length) {
+      this.currentKeyIndex = nextIndex;
+      console.log(
+        `[GEMINI] Rotated to API key #${nextIndex + 1} of ${this.apiKeys.length}`,
+      );
+      return true;
+    }
+    // Reset to first key for next time
+    this.currentKeyIndex = 0;
+    console.log(`[GEMINI] All API keys exhausted, reset to key #1`);
+    return false;
   }
 
   async chat(userId: string, dto: ChatDto) {
-    if (!this.geminiApiKey) {
+    if (this.apiKeys.length === 0) {
       throw new BadRequestException("Gemini API kaliti sozlanmagan");
     }
 
@@ -228,128 +267,140 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
     };
   }
 
-  // Gemini API - @google/genai SDK orqali (2026 yangi API)
+  // Gemini API - @google/genai SDK orqali (API Key Rotation bilan)
   private async callGemini(
     contents: Array<{ role: string; parts: Array<{ text: string }> }>,
     audioData?: { mimeType: string; data: string } | null,
   ): Promise<string | null> {
-    if (!this.ai) {
-      console.error("Gemini API not initialized");
-      return null;
-    }
+    // 2026 yangi Gemini modellar
+    const models = [
+      "gemini-2.5-flash-preview-05-20", // Eng yangi 2.5 flash
+      "gemini-2.0-flash", // Barqaror flash
+      "gemini-2.5-pro-preview-05-06", // Pro preview
+    ];
 
-    // 2026 yangi Gemini modellar - eng yaxshilari
-    // Audio uchun multimodal modellar
-    const models = audioData
-      ? [
-          "gemini-3-flash-preview",
-          "gemini-2.5-flash-preview-05-20", // Eng yangi 2.5 flash preview - audio qo'llab-quvvatlaydi
-          "gemini-2.5-pro-preview-05-06", // 2.5 pro preview
-          "gemini-2.0-flash", // Zaxira
-        ]
-      : [
-          "gemini-3-flash-preview",
-          "gemini-2.5-flash-preview-05-20", // Eng yangi va tez
-          "gemini-2.0-flash", // Barqaror
-          "gemini-2.5-pro-preview-05-06", // Kuchli zaxira
-        ];
+    // Barcha API keylarni sinash
+    const startKeyIndex = this.currentKeyIndex;
+    let triedAllKeys = false;
 
-    for (const modelName of models) {
-      try {
-        console.log(
-          "Trying Gemini model:",
-          modelName,
-          audioData ? "(with audio)" : "(text only)",
-        );
+    while (!triedAllKeys) {
+      const ai = this.getCurrentAI();
+      if (!ai) {
+        console.error("[GEMINI] No AI instance available");
+        return null;
+      }
 
-        // Contentlarni tayyorlash
-        let formattedContents: any[];
+      const keyNum = this.currentKeyIndex + 1;
+      console.log(
+        `[GEMINI] Using API key #${keyNum} of ${this.apiKeys.length}`,
+      );
 
-        if (audioData) {
-          // Audio bor - multimodal so'rov
-          // Avvalgi xabarlar
-          const previousMessages = contents.slice(0, -1).map((c) => ({
-            role: c.role === "model" ? "model" : "user",
-            parts: c.parts.map((p) => ({ text: p.text })),
-          }));
+      // Har bir model bilan sinash
+      for (const modelName of models) {
+        try {
+          console.log(
+            `[GEMINI] Trying model: ${modelName}`,
+            audioData ? "(with audio)" : "(text only)",
+          );
 
-          // Oxirgi xabar audio bilan
-          const lastMessage = contents[contents.length - 1];
-          const audioMessage = {
-            role: "user",
-            parts: [
-              {
-                inlineData: {
-                  mimeType: audioData.mimeType,
-                  data: audioData.data,
+          // Contentlarni tayyorlash
+          let formattedContents: any[];
+
+          if (audioData) {
+            // Audio bor - multimodal so'rov
+            const previousMessages = contents.slice(0, -1).map((c) => ({
+              role: c.role === "model" ? "model" : "user",
+              parts: c.parts.map((p) => ({ text: p.text })),
+            }));
+
+            const lastMessage = contents[contents.length - 1];
+            const audioMessage = {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: audioData.mimeType,
+                    data: audioData.data,
+                  },
                 },
-              },
-              {
-                text: `${lastMessage.parts[0].text}
+                {
+                  text: `${lastMessage.parts[0].text}
 
 MUHIM: Bu ovozli xabar O'ZBEK TILIDA. Ovozni diqqat bilan tingla, nima deyilganini tushun va to'g'ridan-to'g'ri javob ber. Sheva va lahjalar ham bo'lishi mumkin.`,
-              },
-            ],
-          };
+                },
+              ],
+            };
 
-          formattedContents = [...previousMessages, audioMessage];
-        } else {
-          // Faqat matn
-          formattedContents = contents.map((c) => ({
-            role: c.role === "model" ? "model" : "user",
-            parts: c.parts.map((p) => ({ text: p.text })),
-          }));
-        }
+            formattedContents = [...previousMessages, audioMessage];
+          } else {
+            formattedContents = contents.map((c) => ({
+              role: c.role === "model" ? "model" : "user",
+              parts: c.parts.map((p) => ({ text: p.text })),
+            }));
+          }
 
-        const response = await this.ai.models.generateContent({
-          model: modelName,
-          contents: formattedContents as any,
-          config: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-          },
-        });
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: formattedContents as any,
+            config: {
+              temperature: 0.7,
+              maxOutputTokens: 2048,
+            },
+          });
 
-        const text = response.text;
+          const text = response.text;
 
-        if (text) {
-          console.log("Success with Gemini model:", modelName);
-          return text;
-        }
-      } catch (error: any) {
-        const errorMsg =
-          typeof error.message === "string"
-            ? error.message
-            : JSON.stringify(error);
-        console.error(
-          "Error with Gemini model",
-          modelName,
-          ":",
-          errorMsg.substring(0, 200),
-        );
-
-        // Rate limit xatosi bo'lsa, 5 sekund kutib qayta urinish
-        if (
-          errorMsg.includes("429") ||
-          errorMsg.includes("quota") ||
-          errorMsg.includes("RESOURCE_EXHAUSTED")
-        ) {
-          console.log(
-            "Rate limit hit, waiting 5 seconds before trying next model...",
+          if (text) {
+            console.log(
+              `[GEMINI] ✅ Success with model: ${modelName}, API key #${keyNum}`,
+            );
+            return text;
+          }
+        } catch (error: any) {
+          const errorMsg =
+            typeof error.message === "string"
+              ? error.message
+              : JSON.stringify(error);
+          console.error(
+            `[GEMINI] Error with ${modelName}:`,
+            errorMsg.substring(0, 150),
           );
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+
+          // Rate limit yoki quota xatosi - keyingi API key'ga o'tish
+          if (
+            errorMsg.includes("429") ||
+            errorMsg.includes("quota") ||
+            errorMsg.includes("RESOURCE_EXHAUSTED")
+          ) {
+            console.log(
+              `[GEMINI] ⚠️ Rate limit on API key #${keyNum}, rotating...`,
+            );
+            break; // Bu API key uchun boshqa model sinashni to'xtatish
+          }
+
+          // 404 xatosi - keyingi model
+          if (errorMsg.includes("404") || errorMsg.includes("NOT_FOUND")) {
+            console.log(
+              `[GEMINI] Model ${modelName} not found, trying next...`,
+            );
+            continue;
+          }
+
+          // Boshqa xatolik - keyingi model
           continue;
         }
-        // 404 xatosi - model topilmadi
-        if (errorMsg.includes("404") || errorMsg.includes("NOT_FOUND")) {
-          console.log("Model not found, trying next...");
-          continue;
-        }
-        // Boshqa xato bo'lsa ham keyingi modelni sinash
-        continue;
+      }
+
+      // Keyingi API key'ga o'tish
+      const rotated = this.rotateToNextKey();
+
+      // Agar boshidan boshlab kelgan bo'lsak, to'xtatish
+      if (this.currentKeyIndex === startKeyIndex || !rotated) {
+        triedAllKeys = true;
       }
     }
 
+    console.error("[GEMINI] ❌ All API keys and models exhausted");
     return null;
   }
 }

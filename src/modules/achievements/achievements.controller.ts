@@ -13,14 +13,14 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 export class AchievementsController {
   constructor(private achievementsService: AchievementsService) {}
 
-  // @Get()
-  // @UseGuards(JwtAuthGuard)
-  // @ApiBearerAuth()
-  // @ApiOperation({ summary: 'Barcha yutuqlarni ko\'rish (progress bilan)' })
-  // @ApiResponse({ status: 200, description: 'Yutuqlar ro\'yxati' })
-  // async getAllAchievements(@Req() req: any) {
-  //   return this.achievementsService.getAllAchievements(req.user.id);
-  // }
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Barcha yutuqlarni ko'rish (progress bilan)" })
+  @ApiResponse({ status: 200, description: "Yutuqlar ro'yxati" })
+  async getAllAchievements(@Req() req: any) {
+    return this.achievementsService.getAllAchievements(req.user.id);
+  }
 
   @Get("my")
   @UseGuards(JwtAuthGuard)
@@ -38,7 +38,7 @@ export class AchievementsController {
   @ApiResponse({ status: 200, description: "Yangi olingan yutuqlar" })
   async checkMyAchievements(@Req() req: any) {
     const newAchievements = await this.achievementsService.checkAchievements(
-      req.user.id
+      req.user.id,
     );
     return {
       message: "Yutuqlar tekshirildi",
