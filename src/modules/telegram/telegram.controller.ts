@@ -62,13 +62,13 @@ export class TelegramController {
   async handleWebhook(@Body() update: any) {
     // Immediately return OK to avoid timeout
     process.stderr.write(
-      `[WEBHOOK_CONTROLLER] Received update: ${update?.message?.text}\n`
+      `[WEBHOOK_CONTROLLER] Received update: ${update?.message?.text}\n`,
     );
     try {
       // Process update in background, don't wait
       this.telegramService.handleWebhookUpdate(update).catch((err) => {
         process.stderr.write(
-          `[WEBHOOK] Error handling update: ${err.message}\n`
+          `[WEBHOOK] Error handling update: ${err.message}\n`,
         );
       });
     } catch (err) {

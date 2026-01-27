@@ -541,7 +541,7 @@ export class TelegramService {
   async setBotDescriptions() {
     if (!this.botToken) return;
 
-    const description = 
+    const description =
       "📖 TAVBA - Islomiy bilim platformasi\n\n" +
       "✅ Qur'on, Hadis, Fiqh, Aqida testlari\n" +
       "🤖 AI yordamchi - islomiy savollarga javob\n" +
@@ -549,22 +549,29 @@ export class TelegramService {
       "🏆 Reyting va yutuqlar tizimi\n\n" +
       "Bilimingizni sinab, savob qozoning!";
 
-    const shortDescription = "📖 Islomiy testlar, AI yordamchi, zikrlar va duolar - Tavba platformasi";
+    const shortDescription =
+      "📖 Islomiy testlar, AI yordamchi, zikrlar va duolar - Tavba platformasi";
 
     try {
       // Set description (512 character limit)
-      await fetch(`https://api.telegram.org/bot${this.botToken}/setMyDescription`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description }),
-      });
+      await fetch(
+        `https://api.telegram.org/bot${this.botToken}/setMyDescription`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description }),
+        },
+      );
 
       // Set short description (120 character limit)
-      await fetch(`https://api.telegram.org/bot${this.botToken}/setMyShortDescription`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ short_description: shortDescription }),
-      });
+      await fetch(
+        `https://api.telegram.org/bot${this.botToken}/setMyShortDescription`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ short_description: shortDescription }),
+        },
+      );
 
       console.log("[TELEGRAM] Bot descriptions updated successfully");
     } catch (error) {
@@ -598,7 +605,7 @@ export class TelegramService {
 
         // Professional welcome message for Tavba platform
         const webappUrl = this.configService.get("WEBAPP_URL");
-        
+
         const messageText =
           `Assalomu alaykum, ${firstName}! 👋\n\n` +
           `🕌 <b>TAVBA</b> - Islomiy bilim platformasiga xush kelibsiz!\n\n` +
@@ -630,7 +637,10 @@ export class TelegramService {
           });
         } else {
           // For localhost/development - send without button
-          const devMessage = messageText.replace("👇 Boshlash uchun tugmani bosing:", `🔗 Platform: ${webappUrl || "http://localhost:3000"}`);
+          const devMessage = messageText.replace(
+            "👇 Boshlash uchun tugmani bosing:",
+            `🔗 Platform: ${webappUrl || "http://localhost:3000"}`,
+          );
           await this.sendMessage(chatId, devMessage, {
             parse_mode: "HTML",
           });
