@@ -25,7 +25,6 @@ import { AdminMessage, Setting, DesignSetting } from "./entities";
 import { WeeklyXP, MonthlyXP } from "../leaderboard/entities";
 import { Zikr, ZikrCompletion } from "../zikr/entities";
 import { NotificationsService } from "../notifications/notifications.service";
-import { MailService } from "../mail/mail.service";
 import { TelegramService } from "../telegram/telegram.service";
 
 @Injectable()
@@ -65,7 +64,6 @@ export class AdminService {
     private zikrCompletionRepository: Repository<ZikrCompletion>,
     private dataSource: DataSource,
     private notificationsService: NotificationsService,
-    private mailService: MailService,
     private telegramService: TelegramService,
   ) {}
 
@@ -387,6 +385,20 @@ export class AdminService {
     };
   }
 
+  async updateUserRole(userId: string, role: string) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
+
+    // Validate role
+    const validRoles = ["USER", "MODERATOR", "ADMIN"];
+    if (!validRoles.includes(role)) {
+      throw new BadRequestException("Noto'g'ri rol");
+    }
+
+    user.role = role as any;
+    return this.userRepository.save(user);
+  }
+
   async blockUser(userId: string, blocked: boolean) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException("Foydalanuvchi topilmadi");
@@ -690,6 +702,64 @@ export class AdminService {
     return this.getSettings();
   }
 
+  // ==================== DESIGN SETTINGS ====================
+  async getDesignSettings() {
+    let settings = await this.designSettingRepository.findOne({
+      where: { isActive: true },
+    });
+
+    // Default yaratish agar yo'q bo'lsa
+    if (!settings) {
+      settings = this.designSettingRepository.create({
+        isActive: true,
+        videoLoop: true,
+        videoMuted: true,
+      });
+      await this.designSettingRepository.save(settings);
+    }
+
+    return settings;
+  }
+
+  async updateDesignSettings(dto: {
+    lightVideoUrl?: string;
+    darkVideoUrl?: string;
+    lightImageUrl?: string;
+    darkImageUrl?: string;
+    videoLoop?: boolean;
+    videoMuted?: boolean;
+    theme?: string;
+    isActive?: boolean;
+  }) {
+    let settings = await this.designSettingRepository.findOne({
+      where: { isActive: true },
+    });
+
+    if (!settings) {
+      settings = this.designSettingRepository.create({
+        isActive: true,
+        videoLoop: true,
+        videoMuted: true,
+      });
+    }
+
+    if (dto.lightVideoUrl !== undefined)
+      settings.lightVideoUrl = dto.lightVideoUrl;
+    if (dto.darkVideoUrl !== undefined)
+      settings.darkVideoUrl = dto.darkVideoUrl;
+    if (dto.lightImageUrl !== undefined)
+      settings.lightImageUrl = dto.lightImageUrl;
+    if (dto.darkImageUrl !== undefined)
+      settings.darkImageUrl = dto.darkImageUrl;
+    if (dto.videoLoop !== undefined) settings.videoLoop = dto.videoLoop;
+    if (dto.videoMuted !== undefined) settings.videoMuted = dto.videoMuted;
+    if (dto.theme !== undefined) settings.theme = dto.theme;
+    if (dto.isActive !== undefined) settings.isActive = dto.isActive;
+
+    await this.designSettingRepository.save(settings);
+    return settings;
+  }
+
   // ==================== HELPERS ====================
   private calculateLevel(xp: number): number {
     const thresholds = [
@@ -984,7 +1054,6 @@ export class AdminService {
         name: savedCategory.name,
         slug: savedCategory.slug,
         icon: savedCategory.icon,
-        group: savedCategory.group,
       })
       .catch((err) => {
         console.error("Failed to send new category notifications:", err);
@@ -1283,71 +1352,6 @@ export class AdminService {
     return questions;
   }
 
-  // ==================== DESIGN SETTINGS ====================
-  async getDesignSettings() {
-    let settings = await this.designSettingRepository.findOne({
-      where: { isActive: true },
-    });
-
-    if (!settings) {
-      // Create default settings
-      settings = this.designSettingRepository.create({
-        theme: "default",
-        videoLoop: true,
-        videoMuted: true,
-        isActive: true,
-      });
-      await this.designSettingRepository.save(settings);
-    }
-
-    return settings;
-  }
-
-  async updateDesignSettings(data: {
-    theme?: string;
-    lightVideoUrl?: string;
-    darkVideoUrl?: string;
-    lightImageUrl?: string;
-    darkImageUrl?: string;
-    videoLoop?: boolean;
-    videoMuted?: boolean;
-  }) {
-    let settings = await this.designSettingRepository.findOne({
-      where: { isActive: true },
-    });
-
-    if (!settings) {
-      const newSettings = this.designSettingRepository.create({
-        ...data,
-        isActive: true,
-      });
-      return this.designSettingRepository.save(newSettings);
-    }
-
-    Object.assign(settings, data);
-    return this.designSettingRepository.save(settings);
-  }
-
-  async resetDesignToDefault() {
-    const settings = await this.designSettingRepository.findOne({
-      where: { isActive: true },
-    });
-
-    if (settings) {
-      settings.theme = "default";
-      settings.lightVideoUrl = null;
-      settings.darkVideoUrl = null;
-      settings.lightImageUrl = null;
-      settings.darkImageUrl = null;
-      settings.videoLoop = true;
-      settings.videoMuted = true;
-      return this.designSettingRepository.save(settings);
-    }
-
-    return this.getDesignSettings();
-  }
-
-  // ==================== EXTENDED MESSAGING ====================
   async sendMultiChannelMessage(params: {
     adminId: string;
     title: string;
@@ -1458,60 +1462,6 @@ export class AdminService {
 
     // Send via channels
     for (const user of users) {
-      // Send notification
-      if (channels.includes("notification")) {
-        try {
-          const notificationData: any = {
-            adminId: admin?.id,
-            adminUsername: admin?.username,
-            adminAvatar: admin?.avatar,
-            adminFullName: admin?.fullName,
-          };
-
-          // Only add media URLs if they exist
-          if (imageUrl) notificationData.imageUrl = imageUrl;
-          if (videoUrl) notificationData.videoUrl = videoUrl;
-
-          console.log(
-            "[sendMultiChannelMessage] Creating notification with data:",
-            notificationData,
-          );
-
-          await this.notificationsService.createNotification(user.id, {
-            title,
-            message,
-            // type: NotificationType.MESSAGE,
-            data: notificationData,
-          });
-          notifSent++;
-        } catch (error) {
-          console.error("Notification error:", error);
-        }
-      }
-
-      // Send email
-      if (channels.includes("email") && user.email) {
-        try {
-          console.log(
-            "[Admin] Sending email with imageUrl:",
-            imageUrl,
-            "videoUrl:",
-            videoUrl,
-          );
-          await this.mailService.sendAdminMessage(
-            user.email,
-            title,
-            message,
-            admin?.fullName || admin?.username,
-            imageUrl,
-            videoUrl,
-          );
-          emailSent++;
-        } catch (error) {
-          console.error("Email error:", error);
-        }
-      }
-
       // Send telegram
       if (channels.includes("telegram") && user.telegramId) {
         try {
@@ -1538,7 +1488,6 @@ export class AdminService {
       targetIds: users.map((u) => u.id),
       channels,
       sentAt: new Date(),
-      emailSent,
       telegramSent,
       notifSent,
     });

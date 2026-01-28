@@ -83,6 +83,12 @@ export class AdminController {
     return this.adminService.getUserDetails(id);
   }
 
+  @Patch("users/:id/role")
+  @ApiOperation({ summary: "Update user role (Admin only)" })
+  updateUserRole(@Param("id") id: string, @Body() dto: UpdateUserRoleDto) {
+    return this.adminService.updateUserRole(id, dto.role ?? "USER");
+  }
+
   @Patch("users/:id/block")
   @ApiOperation({ summary: "Block or unblock user" })
   blockUser(@Param("id") id: string, @Body() dto: BlockUserDto) {
@@ -95,7 +101,7 @@ export class AdminController {
     return this.adminService.adjustUserXP(
       id,
       dto.amount ?? 0,
-      dto.reason ?? ""
+      dto.reason ?? "",
     );
   }
 
@@ -127,7 +133,7 @@ export class AdminController {
   getMessageHistory(
     @Request() req: any,
     @Query("page") page?: number,
-    @Query("limit") limit?: number
+    @Query("limit") limit?: number,
   ) {
     return this.adminService.getMessageHistory(req.user.id, page, limit);
   }
@@ -173,31 +179,12 @@ export class AdminController {
   @ApiOperation({ summary: "Import questions from text (namuna.txt format)" })
   importQuestionsFromText(
     @Param("id") categoryId: string,
-    @Body() dto: ImportQuestionsTextDto
+    @Body() dto: ImportQuestionsTextDto,
   ) {
     if (!dto.text) {
       throw new Error("Text is required");
     }
     return this.adminService.importQuestionsFromText(categoryId, dto.text);
-  }
-
-  // ==================== DESIGN ====================
-  @Get("design")
-  @ApiOperation({ summary: "Get design settings" })
-  getDesignSettings() {
-    return this.adminService.getDesignSettings();
-  }
-
-  @Patch("design")
-  @ApiOperation({ summary: "Update design settings" })
-  updateDesignSettings(@Body() dto: UpdateDesignDto) {
-    return this.adminService.updateDesignSettings(dto);
-  }
-
-  @Post("design/reset")
-  @ApiOperation({ summary: "Reset design to default" })
-  resetDesignToDefault() {
-    return this.adminService.resetDesignToDefault();
   }
 
   // ==================== QUESTIONS ====================
@@ -227,5 +214,18 @@ export class AdminController {
   @ApiOperation({ summary: "Update platform settings" })
   updateSettings(@Body() dto: UpdateSettingsDto) {
     return this.adminService.updateSettings(dto);
+  }
+
+  // ==================== DESIGN SETTINGS ====================
+  @Get("design")
+  @ApiOperation({ summary: "Get design settings" })
+  getDesignSettings() {
+    return this.adminService.getDesignSettings();
+  }
+
+  @Patch("design")
+  @ApiOperation({ summary: "Update design settings" })
+  updateDesignSettings(@Body() dto: UpdateDesignDto) {
+    return this.adminService.updateDesignSettings(dto);
   }
 }

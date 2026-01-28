@@ -15,7 +15,6 @@ import { Notification } from "./modules/notifications/entities";
 import { AIChat } from "./modules/ai/entities";
 import { AdminMessage, Setting, DesignSetting } from "./modules/admin/entities";
 import { WeeklyXP, MonthlyXP } from "./modules/leaderboard/entities";
-import { EmailVerification } from "./modules/auth/entities";
 import { Zikr, ZikrCompletion } from "./modules/zikr/entities";
 
 // Modules
@@ -121,7 +120,6 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
             MonthlyXP,
             Setting,
             DesignSetting,
-            EmailVerification,
             Zikr,
             ZikrCompletion,
           ],

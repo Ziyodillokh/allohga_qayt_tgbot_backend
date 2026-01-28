@@ -147,7 +147,7 @@ export class NotificationsService {
 
     const webappUrl =
       this.configService.get<string>("WEBAPP_URL") || "http://localhost:3000";
-    const categoryUrl = `${webappUrl}/categories/${category.slug}`;
+    const categoryUrl = `${webappUrl}/test/${category.slug}`;
 
     // Check if icon is a file path or emoji
     const isIconFile = category.icon && category.icon.startsWith("/uploads/");
@@ -200,10 +200,8 @@ export class NotificationsService {
 
     // For in-app notifications, store relative path (frontend will add base URL)
     const iconUrlForInApp = isIconFile ? category.icon : null;
-    const groupLabel = this.getGroupLabel(category.group);
 
     let telegramSent = 0;
-    let emailSent = 0;
     let websocketSent = 0;
     let errors = 0;
 
@@ -244,7 +242,7 @@ export class NotificationsService {
                   `${category.name}.png`,
                   `🎉 <b>Yangi kategoriya qo'shildi!</b>\n\n` +
                     `📚 <b>${category.name}</b>\n` +
-                    (groupLabel ? `📁 ${groupLabel}\n\n` : "\n") +
+                    (category.slug ? `📁 ${category.slug}\n\n` : "\n") +
                     `Yangi testlarni sinab ko'ring va bilimingizni oshiring! 🚀`,
                   {
                     parse_mode: "HTML",
@@ -266,7 +264,7 @@ export class NotificationsService {
                   user.telegramId,
                   `🎉 <b>Yangi kategoriya qo'shildi!</b>\n\n` +
                     `${iconEmoji} <b>${category.name}</b>\n` +
-                    (groupLabel ? `📁 ${groupLabel}\n\n` : "\n") +
+                    (category.slug ? `📁 ${category.slug}\n\n` : "\n") +
                     `Yangi testlarni sinab ko'ring va bilimingizni oshiring! 🚀`,
                   {
                     parse_mode: "HTML",
@@ -291,27 +289,6 @@ export class NotificationsService {
               errors++;
             }
           }
-
-          // Send Email notification
-          if (user.email) {
-            try {
-              await this.sendNewCategoryEmail(
-                user.email,
-                user.fullName || user.username,
-                category.name,
-                iconAbsoluteUrl,
-                iconEmoji,
-                groupLabel,
-                categoryUrl,
-              );
-              emailSent++;
-            } catch (error: any) {
-              this.logger.warn(
-                `Failed to send email to ${user.email}: ${error?.message || error}`,
-              );
-              errors++;
-            }
-          }
         }),
       );
 
@@ -321,14 +298,9 @@ export class NotificationsService {
       }
     }
 
-    this.logger.log(
-      `Notifications sent - Telegram: ${telegramSent}, Email: ${emailSent}, WebSocket: ${websocketSent}, Errors: ${errors}`,
-    );
-
     return {
       totalUsers: users.length,
       telegramSent,
-      emailSent,
       websocketSent,
       errors,
     };
@@ -457,124 +429,5 @@ export class NotificationsService {
     }
 
     return data.result;
-  }
-
-  /**
-   * Send new category notification email
-   */
-  private async sendNewCategoryEmail(
-    email: string,
-    userName: string,
-    categoryName: string,
-    iconUrl: string | null,
-    iconEmoji: string,
-    groupLabel: string,
-    categoryUrl: string,
-  ) {
-    const nodemailer = await import("nodemailer");
-
-    const transporter = nodemailer.createTransport({
-      host: this.configService.get("SMTP_HOST") || "smtp.gmail.com",
-      port: parseInt(this.configService.get("SMTP_PORT") || "587"),
-      secure: false,
-      auth: {
-        user: this.configService.get("SMTP_USER"),
-        pass: this.configService.get("SMTP_PASS"),
-      },
-    });
-
-    // Icon display - either image or emoji
-    const iconDisplay = iconUrl
-      ? `<img src="${iconUrl}" alt="${categoryName}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 12px;" />`
-      : `<span style="font-size: 48px;">${iconEmoji}</span>`;
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      </head>
-      <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-        <table width="100%" cellspacing="0" cellpadding="0" style="padding: 40px 20px;">
-          <tr>
-            <td align="center">
-              <table width="100%" style="max-width: 600px; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.2);">
-                <!-- Header -->
-                <tr>
-                  <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
-                    <h1 style="margin: 0; color: #ffffff; font-size: 28px;">🎓 Bilimdon</h1>
-                    <p style="margin: 10px 0 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Bilim platformasi</p>
-                  </td>
-                </tr>
-                
-                <!-- Content -->
-                <tr>
-                  <td style="padding: 40px 30px;">
-                    <h2 style="margin: 0 0 20px 0; color: #1f2937; font-size: 24px;">🎉 Yangi kategoriya qo'shildi!</h2>
-                    
-                    <p style="margin: 0 0 20px 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
-                      Assalomu alaykum, <strong>${userName}</strong>!
-                    </p>
-                    
-                    <div style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border-radius: 12px; padding: 25px; margin: 25px 0; text-align: center;">
-                      ${iconDisplay}
-                      <h3 style="margin: 15px 0 5px 0; color: #1f2937; font-size: 22px;">${categoryName}</h3>
-                      ${groupLabel ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📁 ${groupLabel}</p>` : ""}
-                    </div>
-                    
-                    <p style="margin: 0 0 25px 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
-                      Yangi testlarni sinab ko'ring va bilimingizni oshiring! Har bir test sizga qimmatli tajriba beradi.
-                    </p>
-                    
-                    <div style="text-align: center;">
-                      <a href="${categoryUrl}" style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 8px; font-weight: 600; font-size: 16px;">
-                        📝 Testni boshlash
-                      </a>
-                    </div>
-                  </td>
-                </tr>
-                
-                <!-- Footer -->
-                <tr>
-                  <td style="background: #f9fafb; padding: 25px 30px; text-align: center; border-top: 1px solid #e5e7eb;">
-                    <p style="margin: 0; color: #9ca3af; font-size: 13px;">
-                      © ${new Date().getFullYear()} Bilimdon. Barcha huquqlar himoyalangan.
-                    </p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-      </html>
-    `;
-
-    await transporter.sendMail({
-      from: `"Bilimdon" <${this.configService.get("SMTP_USER")}>`,
-      to: email,
-      subject: `🎉 Yangi kategoriya: ${categoryName}`,
-      html: htmlContent,
-    });
-  }
-
-  /**
-   * Get group label in Uzbek
-   */
-  private getGroupLabel(group?: string | null): string {
-    if (!group) return "";
-
-    const groupLabels: Record<string, string> = {
-      programming: "Dasturlash",
-      frontend: "Frontend",
-      backend: "Backend",
-      database: "Database",
-      devops: "DevOps",
-      science: "Fanlar",
-      other: "Boshqa",
-    };
-
-    return groupLabels[group] || group;
   }
 }

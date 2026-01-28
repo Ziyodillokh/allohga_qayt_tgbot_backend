@@ -7,13 +7,11 @@ import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./strategies/jwt.strategy";
 import { UsersModule } from "../users/users.module";
-import { MailModule } from "../mail/mail.module";
 import { User } from "../users/entities";
-import { EmailVerification } from "./entities";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, EmailVerification]),
+    TypeOrmModule.forFeature([User]),
     PassportModule.register({ defaultStrategy: "jwt" }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -26,7 +24,6 @@ import { EmailVerification } from "./entities";
       }),
     }),
     UsersModule,
-    MailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

@@ -43,9 +43,6 @@ export class AdminMessage {
   @Column({ type: "simple-array", default: "" })
   channels: string[];
 
-  @Column({ type: "int", default: 0 })
-  emailSent: number;
-
   @Column({ type: "varchar", nullable: true })
   imageUrl: string | null;
 

@@ -6,7 +6,6 @@ import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
 import { AdminGateway } from "./admin.gateway";
 import { NotificationsModule } from "../notifications/notifications.module";
-import { MailModule } from "../mail/mail.module";
 import { TelegramModule } from "../telegram/telegram.module";
 import { User } from "../users/entities";
 import { Category, CategoryStat } from "../categories/entities";
@@ -48,7 +47,6 @@ import { Zikr, ZikrCompletion } from "../zikr/entities";
       inject: [ConfigService],
     }),
     NotificationsModule,
-    MailModule,
     TelegramModule,
   ],
   controllers: [AdminController],
