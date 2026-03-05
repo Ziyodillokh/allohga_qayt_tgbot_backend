@@ -4,6 +4,9 @@ import {
   BadRequestException,
   Inject,
   forwardRef,
+  OnModuleInit,
+  OnModuleDestroy,
+  Logger,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -38,8 +41,11 @@ interface TelegramWebAppUser {
 }
 
 @Injectable()
-export class TelegramService {
+export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private botToken: string;
+  private pollingActive = false;
+  private pollingOffset = 0;
+  private readonly logger = new Logger(TelegramService.name);
 
   constructor(
     @InjectRepository(User)
@@ -50,6 +56,66 @@ export class TelegramService {
     private uploadService: UploadService,
   ) {
     this.botToken = this.configService.get<string>("TELEGRAM_BOT_TOKEN") || "";
+  }
+
+  async onModuleInit() {
+    if (!this.botToken) {
+      this.logger.warn('TELEGRAM_BOT_TOKEN not set, skipping bot polling');
+      return;
+    }
+    // Start polling in background (non-blocking)
+    this.startPolling().catch((err) =>
+      this.logger.error('Polling error:', err.message),
+    );
+  }
+
+  onModuleDestroy() {
+    this.pollingActive = false;
+  }
+
+  private async startPolling() {
+    this.pollingActive = true;
+    this.logger.log('🤖 Telegram bot polling started...');
+
+    // Delete webhook first
+    try {
+      await fetch(`https://api.telegram.org/bot${this.botToken}/deleteWebhook`, {
+        method: 'POST',
+      });
+      this.logger.log('✅ Webhook deleted, polling mode active');
+    } catch (e) {
+      this.logger.warn('Could not delete webhook:', e.message);
+    }
+
+    while (this.pollingActive) {
+      try {
+        const res = await fetch(
+          `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.pollingOffset}&timeout=30&allowed_updates=["message","callback_query"]`,
+        );
+        if (!res.ok) {
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        const data = await res.json();
+        if (!data.ok) {
+          this.logger.error('Telegram API error:', JSON.stringify(data));
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        for (const update of data.result || []) {
+          this.pollingOffset = update.update_id + 1;
+          this.handleWebhookUpdate(update).catch((err) =>
+            this.logger.error('Update handler error:', err.message),
+          );
+        }
+      } catch (err) {
+        if (this.pollingActive) {
+          this.logger.error('Polling fetch error:', err.message);
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+      }
+    }
+    this.logger.log('🛑 Telegram bot polling stopped');
   }
 
   /**
@@ -813,4 +879,5 @@ export class TelegramService {
 
     return link;
   }
+
 }

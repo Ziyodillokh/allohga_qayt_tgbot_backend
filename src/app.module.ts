@@ -4,6 +4,7 @@ import { ThrottlerModule } from "@nestjs/throttler";
 import { ServeStaticModule } from "@nestjs/serve-static";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { join } from "path";
+import { HealthController } from "./health.controller";
 
 // Entities from modules
 import { User } from "./modules/users/entities";
@@ -126,7 +127,7 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
           synchronize: false, // Production'da o'chirilgan - migration ishlatish kerak
           logging: false, // Disabled to reduce terminal noise
           ssl:
-            configService.get("NODE_ENV") === "production"
+            configService.get("DB_SSL") === "true"
               ? { rejectUnauthorized: false }
               : false,
         };
@@ -150,5 +151,6 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
     ZikrModule,
     WebsocketModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}
