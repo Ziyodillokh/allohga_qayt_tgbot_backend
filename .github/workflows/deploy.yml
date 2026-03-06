@@ -34,14 +34,26 @@ jobs:
             set -e
             echo "=== Backend deploy boshlandi ==="
 
+            # Determine app directory
+            APP_DIR=""
+            if [ -d /root/ziyodullo ]; then
+              APP_DIR="/root/ziyodullo"
+            elif [ -d /root/ziydullo ]; then
+              APP_DIR="/root/ziydullo"
+            else
+              echo "ERROR: App directory not found!"
+              exit 1
+            fi
+            echo "Using APP_DIR: $APP_DIR"
+
             # Pull latest code from GitHub
-            cd /root/ziydullo/backend
-            git fetch origin main
-            git reset --hard origin/main
+            cd $APP_DIR/backend
+            git fetch origin main || git fetch origin master
+            git reset --hard origin/main || git reset --hard origin/master
 
             # Run migration if postgres is running
-            cd /root/ziydullo
-            docker compose exec -T postgres psql -U postgres -d bilimdon -c "ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS \"questionIds\" text NOT NULL DEFAULT '';" || echo "Migration skipped or already applied"
+            cd $APP_DIR
+            docker compose exec -T postgres psql -U postgres -d bilimdon -c "ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS \"questionIds\" text NOT NULL DEFAULT '';" 2>/dev/null || echo "Migration skipped or already applied"
 
             echo "=== Docker rebuild ==="
             docker compose stop backend
@@ -53,6 +65,6 @@ jobs:
             echo "Waiting for backend to start..."
             sleep 30
             docker compose ps backend
-            docker compose logs backend --tail=20
+            docker compose logs backend --tail=30
 
             echo "=== Backend deploy tugadi ==="
