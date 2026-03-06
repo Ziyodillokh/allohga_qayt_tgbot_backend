@@ -112,11 +112,21 @@ export class TestsService {
       );
     }
 
+    // Get category name
+    let categoryName = "Aralash test";
+    if (dto.categoryId) {
+      const category = await this.categoryRepository.findOne({
+        where: { id: dto.categoryId },
+      });
+      if (category) categoryName = category.name;
+    }
+
     // Create test attempt (userId can be null for unauthenticated users)
     const testAttempt = this.testAttemptRepository.create({
       userId: userId || null,
       categoryId: dto.categoryId || null,
       totalQuestions: questions.length,
+      questionIds: questions.map((q: any) => q.id),
     });
     await this.testAttemptRepository.save(testAttempt);
 
@@ -135,6 +145,45 @@ export class TestsService {
       testAttemptId: testAttempt.id,
       questions: questionsForUser,
       totalQuestions: questions.length,
+      categoryName,
+    };
+  }
+
+  async getTestAttempt(testAttemptId: string) {
+    const testAttempt = await this.testAttemptRepository.findOne({
+      where: { id: testAttemptId },
+      relations: ["category"],
+    });
+
+    if (!testAttempt) {
+      throw new NotFoundException("Test topilmadi");
+    }
+
+    // Get questions by ids
+    const questions = await this.questionRepository.findByIds(
+      testAttempt.questionIds,
+    );
+
+    // Get category name
+    const categoryName = testAttempt.category
+      ? testAttempt.category.name
+      : "Aralash test";
+
+    // Return questions without correct answers
+    const questionsForUser = questions.map((q) => ({
+      id: q.id,
+      question: q.question,
+      options: q.options,
+      difficulty: q.difficulty,
+      levelIndex: q.levelIndex,
+      xpReward: q.xpReward,
+    }));
+
+    return {
+      testAttemptId: testAttempt.id,
+      questions: questionsForUser,
+      totalQuestions: testAttempt.totalQuestions,
+      categoryName,
     };
   }
 

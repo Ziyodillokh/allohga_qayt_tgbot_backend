@@ -26,6 +26,9 @@ export class TestAttempt {
   @Column({ type: "uuid", nullable: true })
   categoryId: string | null;
 
+  @Column({ type: "simple-array", default: "" })
+  questionIds: string[];
+
   @Column({ type: "int", default: 0 })
   score: number;
 

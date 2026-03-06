@@ -40,6 +40,11 @@ interface TelegramWebAppUser {
   photo_url?: string;
 }
 
+// Majburiy obuna kanali
+const REQUIRED_CHANNEL_ID = -1002578305491; // t.me/AslBaxt_ilm
+const REQUIRED_CHANNEL_USERNAME = "@AslBaxt_ilm";
+const REQUIRED_CHANNEL_LINK = "https://t.me/AslBaxt_ilm";
+
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private botToken: string;
@@ -60,13 +65,53 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     if (!this.botToken) {
-      this.logger.warn('TELEGRAM_BOT_TOKEN not set, skipping bot polling');
+      this.logger.warn("TELEGRAM_BOT_TOKEN not set, skipping bot polling");
       return;
     }
     // Start polling in background (non-blocking)
     this.startPolling().catch((err) =>
-      this.logger.error('Polling error:', err.message),
+      this.logger.error("Polling error:", err.message),
     );
+    // Setup Web App menu button and bot info
+    this.setupBotWebApp().catch((err) =>
+      this.logger.warn("Bot setup warning:", err.message),
+    );
+  }
+
+  private async setupBotWebApp() {
+    const webappUrl = this.configService.get<string>("WEBAPP_URL");
+    if (!webappUrl || !webappUrl.startsWith("https://")) {
+      this.logger.warn("WEBAPP_URL is not HTTPS, skipping Web App menu setup");
+      return;
+    }
+
+    try {
+      // 1. Menu tugmasini Web App sifatida sozlash
+      const menuRes = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/setChatMenuButton`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            menu_button: {
+              type: "web_app",
+              text: "🕌 Platformani ochish",
+              web_app: { url: webappUrl },
+            },
+          }),
+        },
+      );
+      const menuData = await menuRes.json();
+      if (menuData.ok) {
+        this.logger.log(`✅ Web App menu button set: ${webappUrl}`);
+      }
+
+      // 2. Bot descriptsiyasini yangilash
+      await this.setBotDescriptions();
+      this.logger.log("✅ Bot descriptions updated");
+    } catch (e) {
+      this.logger.warn("Web App setup error:", e.message);
+    }
   }
 
   onModuleDestroy() {
@@ -75,16 +120,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async startPolling() {
     this.pollingActive = true;
-    this.logger.log('🤖 Telegram bot polling started...');
+    this.logger.log("🤖 Telegram bot polling started...");
 
     // Delete webhook first
     try {
-      await fetch(`https://api.telegram.org/bot${this.botToken}/deleteWebhook`, {
-        method: 'POST',
-      });
-      this.logger.log('✅ Webhook deleted, polling mode active');
+      await fetch(
+        `https://api.telegram.org/bot${this.botToken}/deleteWebhook`,
+        {
+          method: "POST",
+        },
+      );
+      this.logger.log("✅ Webhook deleted, polling mode active");
     } catch (e) {
-      this.logger.warn('Could not delete webhook:', e.message);
+      this.logger.warn("Could not delete webhook:", e.message);
     }
 
     while (this.pollingActive) {
@@ -98,24 +146,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
         const data = await res.json();
         if (!data.ok) {
-          this.logger.error('Telegram API error:', JSON.stringify(data));
+          this.logger.error("Telegram API error:", JSON.stringify(data));
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
         for (const update of data.result || []) {
           this.pollingOffset = update.update_id + 1;
           this.handleWebhookUpdate(update).catch((err) =>
-            this.logger.error('Update handler error:', err.message),
+            this.logger.error("Update handler error:", err.message),
           );
         }
       } catch (err) {
         if (this.pollingActive) {
-          this.logger.error('Polling fetch error:', err.message);
+          this.logger.error("Polling fetch error:", err.message);
           await new Promise((r) => setTimeout(r, 5000));
         }
       }
     }
-    this.logger.log('🛑 Telegram bot polling stopped');
+    this.logger.log("🛑 Telegram bot polling stopped");
   }
 
   /**
@@ -645,6 +693,65 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Check if user is a member of the required channel
+   */
+  private async checkChannelMembership(userId: number): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getChatMember`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: REQUIRED_CHANNEL_ID,
+            user_id: userId,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!data.ok) return false;
+      const status = data.result?.status;
+      return ["member", "administrator", "creator"].includes(status);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Send subscription required message
+   */
+  private async sendSubscriptionRequired(
+    chatId: number | string,
+    firstName: string,
+  ) {
+    const text =
+      `⚠️ <b>Xurmatli ${firstName}!</b>\n\n` +
+      `TAVBA platformasidan foydalanish uchun avval kanalimizga obuna bo'ling 👇\n\n` +
+      `📢 <b>${REQUIRED_CHANNEL_USERNAME}</b> — Asl Baxt, Ilm\n\n` +
+      `Obuna bo'lgandan so'ng <b>✅ Obunani tekshirish</b> tugmasini bosing.`;
+
+    await this.sendMessage(chatId, text, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "📢 Kanalga obuna bo'lish",
+              url: REQUIRED_CHANNEL_LINK,
+            },
+          ],
+          [
+            {
+              text: "✅ Obunani tekshirish",
+              callback_data: "check_subscription",
+            },
+          ],
+        ],
+      },
+    });
+  }
+
+  /**
    * Handle incoming webhook update from Telegram
    */
   async handleWebhookUpdate(update: any) {
@@ -653,37 +760,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `[WEBHOOK] Received update: ${JSON.stringify(update)}\n`,
       );
 
-      // Handle /start command - show only platform button (registration optional)
+      // Handle /start command
       if (update.message?.text?.startsWith("/start")) {
         const chatId = update.message.chat.id;
         const from = update.message.from;
         const firstName = from.first_name;
 
-        console.log("[TELEGRAM] /start command detected!");
-        console.log("[TELEGRAM] ChatID:", chatId);
-        console.log("[TELEGRAM] User:", firstName);
+        this.logger.log(`[BOT] /start from ${firstName} (${from.id})`);
 
-        // Save/update user info from message
+        // 1. Kanal a'zoligini tekshirish
+        const isMember = await this.checkChannelMembership(from.id);
+        if (!isMember) {
+          await this.sendSubscriptionRequired(chatId, firstName);
+          return { ok: true };
+        }
+
+        // 2. Foydalanuvchini saqlash
         await this.saveUserFromMessage(from);
 
-        console.log("[TELEGRAM] User saved, sending message...");
-
-        // Professional welcome message for Tavba platform
+        // 3. Xush kelibsiz xabari
         const webappUrl = this.configService.get("WEBAPP_URL");
 
         const messageText =
-          `Assalomu alaykum, ${firstName}! 👋\n\n` +
-          `🕌 <b>TAVBA</b> - Islomiy bilim platformasiga xush kelibsiz!\n\n` +
-          `📚 <b>Platformada:</b>\n` +
-          `• Qur'on, Hadis, Fiqh, Aqida bo'yicha testlar\n` +
-          `• 🤖 AI yordamchi - islomiy savollarga javob\n` +
+          `Assalomu alaykum, <b>${firstName}</b>! 👋\n\n` +
+          `🕌 <b>TAVBA</b> — Islomiy bilim platformasiga xush kelibsiz!\n\n` +
+          `📚 <b>Platformada neler bor:</b>\n` +
+          `• 📖 Qur'on, Hadis, Fiqh, Aqida bo'yicha testlar\n` +
+          `• 🤖 AI yordamchi — islomiy savollarga javob\n` +
           `• 📿 Zikr va duo to'plamlari\n` +
           `• 🏆 Reyting va yutuqlar tizimi\n` +
           `• 📊 Shaxsiy statistika va taraqqiyot\n\n` +
-          `✨ Bilimingizni sinab, savob qozoning!\n\n` +
-          `👇 Boshlash uchun tugmani bosing:`;
+          `✨ <i>Bilimingizni sinab, savob qozoning!</i>\n\n` +
+          `👇 Platformani ochish uchun tugmani bosing:`;
 
-        // Only send web app button if URL starts with https:// (production)
         if (webappUrl && webappUrl.startsWith("https://")) {
           await this.sendMessage(chatId, messageText, {
             parse_mode: "HTML",
@@ -691,27 +800,41 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
               inline_keyboard: [
                 [
                   {
-                    text: "� Tavba platformasini ochish",
-                    web_app: {
-                      url: webappUrl,
-                    },
+                    text: "🕌 TAVBA platformasini ochish",
+                    web_app: { url: webappUrl },
+                  },
+                ],
+                [
+                  {
+                    text:
+                      "📢 " + REQUIRED_CHANNEL_USERNAME + " kanaliga o'tish",
+                    url: REQUIRED_CHANNEL_LINK,
                   },
                 ],
               ],
             },
           });
         } else {
-          // For localhost/development - send without button
-          const devMessage = messageText.replace(
-            "👇 Boshlash uchun tugmani bosing:",
-            `🔗 Platform: ${webappUrl || "http://localhost:3000"}`,
+          await this.sendMessage(
+            chatId,
+            messageText.replace(
+              "👇 Platformani ochish uchun tugmani bosing:",
+              `🔗 Platform: ${webappUrl || "http://localhost:3000"}`,
+            ),
+            { parse_mode: "HTML" },
           );
-          await this.sendMessage(chatId, devMessage, {
-            parse_mode: "HTML",
-          });
         }
 
-        console.log("[TELEGRAM] Message sent successfully!");
+        this.logger.log(`[BOT] Welcome message sent to ${firstName}`);
+      } else if (update.message && !update.message.text?.startsWith("/")) {
+        // Oddiy xabar yuborilganda ham obunani tekshirish
+        const chatId = update.message.chat.id;
+        const from = update.message.from;
+        const isMember = await this.checkChannelMembership(from.id);
+        if (!isMember) {
+          await this.sendSubscriptionRequired(chatId, from.first_name);
+          return { ok: true };
+        }
       }
 
       // Handle contact shared (phone number)
@@ -747,18 +870,82 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Handle callback queries (inline button presses)
       if (update.callback_query) {
         const callbackQueryId = update.callback_query.id;
-        const chatId = update.callback_query.message.chat.id;
+        const chatId = update.callback_query.message?.chat?.id;
+        const from = update.callback_query.from;
         const data = update.callback_query.data;
 
         // Answer callback to remove loading state
-        await fetch(
-          `https://api.telegram.org/bot${this.botToken}/answerCallbackQuery`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ callback_query_id: callbackQueryId }),
-          },
-        );
+        const answerCallback = async (text?: string, showAlert = false) => {
+          await fetch(
+            `https://api.telegram.org/bot${this.botToken}/answerCallbackQuery`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                callback_query_id: callbackQueryId,
+                text,
+                show_alert: showAlert,
+              }),
+            },
+          );
+        };
+
+        // ✅ Obunani tekshirish callback
+        if (data === "check_subscription") {
+          const isMember = await this.checkChannelMembership(from.id);
+          if (isMember) {
+            await answerCallback(
+              "✅ Rahmat! Endi platformadan foydalanishingiz mumkin.",
+              true,
+            );
+            // Obuna xabarini o'chirish
+            try {
+              await fetch(
+                `https://api.telegram.org/bot${this.botToken}/deleteMessage`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: update.callback_query.message.message_id,
+                  }),
+                },
+              );
+            } catch {}
+            // Xush kelibsiz xabari yuborish
+            await this.saveUserFromMessage(from);
+            const webappUrl = this.configService.get("WEBAPP_URL");
+            const firstName = from.first_name;
+            const welcomeText =
+              `✅ <b>Obuna tasdiqlandi!</b>\n\n` +
+              `Assalomu alaykum, <b>${firstName}</b>! 👋\n\n` +
+              `🕌 <b>TAVBA</b> platformasiga xush kelibsiz!\n\n` +
+              `👇 Platformani ochish uchun tugmani bosing:`;
+            if (webappUrl && webappUrl.startsWith("https://")) {
+              await this.sendMessage(chatId, welcomeText, {
+                parse_mode: "HTML",
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "🕌 TAVBA platformasini ochish",
+                        web_app: { url: webappUrl },
+                      },
+                    ],
+                  ],
+                },
+              });
+            }
+          } else {
+            await answerCallback(
+              "❌ Siz hali kanalga obuna bo'lmadingiz! Iltimos, avval obuna bo'ling.",
+              true,
+            );
+          }
+          return { ok: true };
+        }
+
+        await answerCallback();
 
         // Handle share phone request - open Mini App registration page
         if (data === "share_phone") {
@@ -879,5 +1066,4 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     return link;
   }
-
 }

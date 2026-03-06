@@ -61,6 +61,13 @@ export class TestsController {
     return this.testsService.startTest(req.user?.id || null, dto);
   }
 
+  @Get(":testAttemptId")
+  @ApiOperation({ summary: "Test attemptni olish" })
+  @ApiResponse({ status: 200, description: "Test ma'lumotlari" })
+  async getTestAttempt(@Param("testAttemptId") testAttemptId: string) {
+    return this.testsService.getTestAttempt(testAttemptId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @Post(":testAttemptId/submit")
