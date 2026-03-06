@@ -3,9 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies with npm ci for faster and reliable builds
-COPY package.json package-lock.json ./
-RUN npm ci && npm cache clean --force
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi && npm cache clean --force
 
 # Copy all source files
 COPY tsconfig*.json ./
@@ -20,9 +20,9 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
-# Install only production dependencies with npm ci
-COPY package.json package-lock.json ./
-RUN npm ci --only=production && npm cache clean --force
+# Install only production dependencies
+COPY package.json package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci --only=production; else npm install --only=production; fi && npm cache clean --force
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist

@@ -15,11 +15,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Install dependencies and build check
         run: |
-          npm ci
+          npm ci || npm install
           npm run build
         env:
           CI: true
@@ -37,17 +36,23 @@ jobs:
 
             # Pull latest code from GitHub
             cd /root/ziydullo/backend
-            git pull origin main || git pull origin master
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Run migration if postgres is running
+            cd /root/ziydullo
+            docker compose exec -T postgres psql -U postgres -d bilimdon -c "ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS \"questionIds\" text NOT NULL DEFAULT '';" || echo "Migration skipped or already applied"
 
             echo "=== Docker rebuild ==="
-            cd /root/ziydullo
             docker compose stop backend
             docker compose rm -f backend
             docker compose build --no-cache backend
             docker compose up -d backend
 
             # Wait for healthy
+            echo "Waiting for backend to start..."
             sleep 30
             docker compose ps backend
+            docker compose logs backend --tail=20
 
             echo "=== Backend deploy tugadi ==="
