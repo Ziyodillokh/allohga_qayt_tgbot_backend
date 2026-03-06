@@ -710,13 +710,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         },
       );
       const data = await res.json();
-      this.logger.log(`[CHANNEL_CHECK] user=${userId}, response=${JSON.stringify(data)}`);
+      this.logger.log(
+        `[CHANNEL_CHECK] user=${userId}, response=${JSON.stringify(data)}`,
+      );
       if (!data.ok) {
         // Bot kanalda admin emas yoki boshqa xatolik
-        this.logger.warn(`[CHANNEL_CHECK] API error for user ${userId}: ${data.description}`);
+        this.logger.warn(
+          `[CHANNEL_CHECK] API error for user ${userId}: ${data.description}`,
+        );
         // Bot admin bo'lmasa, foydalanuvchini bloklash kerak emas
-        if (data.description?.includes('chat not found') || data.description?.includes('bot is not a member')) {
-          this.logger.error(`[CHANNEL_CHECK] Bot is NOT admin in ${REQUIRED_CHANNEL_USERNAME}! Add bot as admin.`);
+        if (
+          data.description?.includes("chat not found") ||
+          data.description?.includes("bot is not a member")
+        ) {
+          this.logger.error(
+            `[CHANNEL_CHECK] Bot is NOT admin in ${REQUIRED_CHANNEL_USERNAME}! Add bot as admin.`,
+          );
           // Bot admin emas - foydalanuvchini o'tkazib yuboramiz (bloklash emas)
           return true;
         }
@@ -725,7 +734,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const status = data.result?.status;
       this.logger.log(`[CHANNEL_CHECK] user=${userId}, status=${status}`);
       // "left" yoki "kicked" bo'lsa - obuna emas
-      return ["member", "administrator", "creator", "restricted"].includes(status);
+      return ["member", "administrator", "creator", "restricted"].includes(
+        status,
+      );
     } catch (err) {
       this.logger.error(`[CHANNEL_CHECK] Exception: ${err.message}`);
       // Xatolik bo'lsa ham foydalanuvchini bloklash kerak emas

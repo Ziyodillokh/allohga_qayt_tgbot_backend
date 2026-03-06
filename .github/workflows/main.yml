@@ -1,26 +1,12 @@
-name: Deploy Backend 🚀
+# This workflow is disabled - deploy.yml handles deployment
+# Kept for reference only
+name: Backend CI (disabled)
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch: # Manual only
 
 jobs:
-  deploy:
+  info:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to Server
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          script: |
-            cd /root/ziyodullo
-            git pull origin main
-            npm install --force
-            npm run build
-            pm2 restart backend
+      - run: echo "Use deploy.yml workflow instead"

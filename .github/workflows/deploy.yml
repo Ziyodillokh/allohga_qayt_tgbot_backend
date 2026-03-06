@@ -5,7 +5,7 @@ on:
     branches: [main, master]
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -16,45 +16,39 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install dependencies and build check
+      - name: Build check
         run: |
           npm ci || npm install
           npm run build
-        env:
-          CI: true
 
-      - name: Deploy to server
-        uses: appleboy/ssh-action@master
+      - name: Copy backend files to server
+        uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          source: "src/,package.json,package-lock.json,tsconfig.json,tsconfig.build.json,nest-cli.json,Dockerfile,migrations/"
+          target: /root/ziyodullo/backend
+          overwrite: true
+
+      - name: Rebuild backend container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
           timeout: 300s
           script: |
             set -e
             echo "=== Backend deploy boshlandi ==="
+            cd /root/ziyodullo
 
-            # Determine app directory
-            APP_DIR=""
-            if [ -d /root/ziyodullo ]; then
-              APP_DIR="/root/ziyodullo"
-            elif [ -d /root/ziydullo ]; then
-              APP_DIR="/root/ziydullo"
-            else
-              echo "ERROR: App directory not found!"
-              exit 1
-            fi
-            echo "Using APP_DIR: $APP_DIR"
+            # Run pending migrations
+            docker compose exec -T postgres psql -U postgres -d tavba \
+              -c "ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS \"questionIds\" text NOT NULL DEFAULT '';" \
+              2>/dev/null || echo "Migration skipped or already applied"
 
-            # Pull latest code from GitHub
-            cd $APP_DIR/backend
-            git fetch origin main || git fetch origin master
-            git reset --hard origin/main || git reset --hard origin/master
-
-            # Run migration if postgres is running
-            cd $APP_DIR
-            docker compose exec -T postgres psql -U postgres -d bilimdon -c "ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS \"questionIds\" text NOT NULL DEFAULT '';" 2>/dev/null || echo "Migration skipped or already applied"
-
+            # Rebuild backend container
             echo "=== Docker rebuild ==="
             docker compose stop backend
             docker compose rm -f backend
@@ -65,6 +59,5 @@ jobs:
             echo "Waiting for backend to start..."
             sleep 30
             docker compose ps backend
-            docker compose logs backend --tail=30
-
+            docker compose logs backend --tail=20
             echo "=== Backend deploy tugadi ==="
