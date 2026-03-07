@@ -48,7 +48,7 @@ export class TestsService {
     // Find category by slug (aralash/mixed = barcha kategoriyalar)
     const isMixed =
       dto.categorySlug === "aralash" || dto.categorySlug === "mixed";
-    let category = null;
+    let category: Category | null = null;
 
     if (!isMixed) {
       category = await this.categoryRepository.findOne({
