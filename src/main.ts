@@ -10,21 +10,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
-  // Body parser limits for large file uploads (UTF-8 charset)
-  app.use(bodyParser.json({ limit: "50mb", type: "application/json" }));
+  // Body parser limits for large file uploads
+  app.use(bodyParser.json({ limit: "50mb" }));
   app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
-
-  // UTF-8 encoding fix — barcha response'larga charset=utf-8 qo'shish
-  app.use((req, res, next) => {
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    next();
-  });
 
   // Security - rasmlar uchun crossOriginResourcePolicy'ni o'chiramiz
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: "cross-origin" },
-    })
+    }),
   );
 
   // CORS
@@ -78,7 +72,7 @@ async function bootstrap() {
       transformOptions: {
         enableImplicitConversion: true,
       },
-    })
+    }),
   );
 
   // Swagger Documentation

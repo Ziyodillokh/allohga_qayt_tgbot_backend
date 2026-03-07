@@ -26,9 +26,7 @@ export class UsersService {
     private monthlyXPRepository: Repository<MonthlyXP>,
   ) {}
 
-  private readonly LEVEL_THRESHOLDS = [
-    0, 1000, 2000, 5000, 10000, 20000,
-  ];
+  private readonly LEVEL_THRESHOLDS = [0, 1000, 2000, 5000, 10000, 20000];
 
   calculateLevel(totalXP: number): number {
     for (let i = this.LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
