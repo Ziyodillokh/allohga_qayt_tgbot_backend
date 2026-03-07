@@ -45,34 +45,67 @@ export class TestsService {
       answers: { questionId: string; answer: number; isCorrect: boolean }[];
     },
   ) {
-    // Find category by slug
-    const category = await this.categoryRepository.findOne({
-      where: { slug: dto.categorySlug },
-    });
+    // Find category by slug (aralash/mixed = barcha kategoriyalar)
+    const isMixed =
+      dto.categorySlug === "aralash" || dto.categorySlug === "mixed";
+    let category = null;
 
-    if (!category) {
-      throw new NotFoundException("Kategoriya topilmadi");
+    if (!isMixed) {
+      category = await this.categoryRepository.findOne({
+        where: { slug: dto.categorySlug },
+      });
+
+      if (!category) {
+        throw new NotFoundException("Kategoriya topilmadi");
+      }
     }
 
-    // Create test attempt record
+    // Server-side XP hisoblash — client ma'lumotlariga ishonmaymiz
+    let serverScore = 0;
+    let serverTotalXP = 0;
+    const verifiedAnswers: { questionId: string; selectedAnswer: number; isCorrect: boolean }[] = [];
+
+    for (const answer of dto.answers) {
+      const question = await this.questionRepository.findOne({
+        where: { id: answer.questionId },
+      });
+
+      if (!question) continue;
+
+      const isCorrect = question.correctAnswer === answer.answer;
+      if (isCorrect) {
+        serverScore++;
+        serverTotalXP += question.xpReward;
+      }
+
+      verifiedAnswers.push({
+        questionId: answer.questionId,
+        selectedAnswer: answer.answer,
+        isCorrect,
+      });
+    }
+
+    const totalQuestions = verifiedAnswers.length;
+
+    // Create test attempt record with server-calculated values
     const testAttempt = this.testAttemptRepository.create({
-      userId: userId || null, // null for anonymous users (UUID cannot be empty string)
-      categoryId: category.id,
-      totalQuestions: dto.totalQuestions,
-      correctAnswers: dto.score,
-      score: Math.round((dto.score / dto.totalQuestions) * 100),
-      xpEarned: dto.totalXP,
+      userId: userId || null,
+      categoryId: category?.id || null,
+      totalQuestions,
+      correctAnswers: serverScore,
+      score: totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+      xpEarned: serverTotalXP,
       completedAt: new Date(),
     });
 
     await this.testAttemptRepository.save(testAttempt);
 
-    // Save answers
-    for (const answer of dto.answers) {
+    // Save verified answers
+    for (const answer of verifiedAnswers) {
       const testAnswer = this.testAnswerRepository.create({
         testAttemptId: testAttempt.id,
         questionId: answer.questionId,
-        selectedAnswer: answer.answer,
+        selectedAnswer: answer.selectedAnswer,
         isCorrect: answer.isCorrect,
       });
       await this.testAnswerRepository.save(testAnswer);
@@ -80,22 +113,34 @@ export class TestsService {
 
     // If user is authenticated, update their stats
     if (userId) {
-      // Add XP to user
-      await this.usersService.addXP(userId, dto.totalXP);
-      // Increment testsCompleted count - har bir savol 1 ta test hisoblanadi
-      await this.usersService.incrementTestsCompleted(
-        userId,
-        dto.totalQuestions,
-      );
+      // Add server-calculated XP
+      await this.usersService.addXP(userId, serverTotalXP);
+      // 1 ta test yakunlandi (har bir savol emas!)
+      await this.usersService.incrementTestsCompleted(userId, 1);
+
+      // Update category stats
+      if (category?.id) {
+        await this.updateCategoryStats(
+          userId,
+          category.id,
+          serverScore,
+          totalQuestions,
+          serverTotalXP,
+          totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+        );
+      }
+
+      // Check achievements
+      await this.achievementsService.checkAchievements(userId);
     }
 
     return {
       success: true,
       testAttemptId: testAttempt.id,
-      score: dto.score,
-      totalQuestions: dto.totalQuestions,
-      percentage: Math.round((dto.score / dto.totalQuestions) * 100),
-      xpEarned: dto.totalXP,
+      score: serverScore,
+      totalQuestions,
+      percentage: totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+      xpEarned: serverTotalXP,
     };
   }
 

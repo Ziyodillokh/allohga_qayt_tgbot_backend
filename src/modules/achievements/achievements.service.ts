@@ -2,6 +2,7 @@ import { Injectable, Inject, forwardRef } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull, MoreThan } from "typeorm";
 import { NotificationsService } from "../notifications/notifications.service";
+import { UsersService } from "../users/users.service";
 import { Achievement, UserAchievement } from "./entities";
 import { User } from "../users/entities";
 import { TestAttempt } from "../tests/entities";
@@ -41,6 +42,7 @@ export class AchievementsService {
     private aiChatRepository: Repository<AIChat>,
     @Inject(forwardRef(() => NotificationsService))
     private notificationsService: NotificationsService,
+    private usersService: UsersService,
   ) {}
 
   async getUserAchievements(userId: string) {
@@ -239,13 +241,9 @@ export class AchievementsService {
 
       // If newly completed, add XP and notify
       if (completed && !existing?.unlockedAt) {
-        // Add achievement XP
+        // Add achievement XP through addXP for proper level/leaderboard tracking
         if (achievement.xpReward > 0) {
-          await this.userRepository.increment(
-            { id: userId },
-            "totalXP",
-            achievement.xpReward,
-          );
+          await this.usersService.addXP(userId, achievement.xpReward);
         }
 
         // Send notification

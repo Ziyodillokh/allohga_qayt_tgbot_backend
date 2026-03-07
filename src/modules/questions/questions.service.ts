@@ -93,24 +93,41 @@ export class QuestionsService {
   }
 
   async getRandomQuestionsBySlug(categorySlug: string, count: number = 10) {
-    // Find category by slug
-    const category = await this.categoryRepository.findOne({
-      where: { slug: categorySlug },
-    });
+    let questions;
+    let categoryName = "Aralash";
 
-    if (!category) {
-      throw new NotFoundException("Kategoriya topilmadi");
+    if (categorySlug === "aralash" || categorySlug === "mixed") {
+      // Barcha kategoriyalardan aralash savollar
+      questions = await this.questionRepository
+        .createQueryBuilder("question")
+        .leftJoinAndSelect("question.category", "category")
+        .where("question.isActive = :isActive", { isActive: true })
+        .orderBy("RANDOM()")
+        .limit(count)
+        .getMany();
+    } else {
+      // Aniq kategoriya bo'yicha
+      const category = await this.categoryRepository.findOne({
+        where: { slug: categorySlug },
+      });
+
+      if (!category) {
+        throw new NotFoundException("Kategoriya topilmadi");
+      }
+
+      categoryName = category.name;
+
+      questions = await this.questionRepository
+        .createQueryBuilder("question")
+        .leftJoinAndSelect("question.category", "category")
+        .where("question.categoryId = :categoryId", {
+          categoryId: category.id,
+        })
+        .andWhere("question.isActive = :isActive", { isActive: true })
+        .orderBy("RANDOM()")
+        .limit(count)
+        .getMany();
     }
-
-    // Get random questions using RANDOM()
-    const questions = await this.questionRepository
-      .createQueryBuilder("question")
-      .leftJoinAndSelect("question.category", "category")
-      .where("question.categoryId = :categoryId", { categoryId: category.id })
-      .andWhere("question.isActive = :isActive", { isActive: true })
-      .orderBy("RANDOM()")
-      .limit(count)
-      .getMany();
 
     if (questions.length === 0) {
       throw new BadRequestException("Bu kategoriyada savollar mavjud emas");
@@ -126,7 +143,7 @@ export class QuestionsService {
         text: opt,
       })),
       correctAnswer: String.fromCharCode(65 + q.correctAnswer), // 0 -> A, 1 -> B, etc.
-      category: category.name,
+      category: q.category?.name || categoryName,
       xpReward: q.xpReward,
     }));
   }

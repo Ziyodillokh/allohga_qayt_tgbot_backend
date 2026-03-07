@@ -6,12 +6,13 @@ import {
   forwardRef,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, MoreThanOrEqual, DataSource } from "typeorm";
+import { Repository, MoreThanOrEqual } from "typeorm";
 import { Zikr, ZikrCompletion } from "./entities";
 import { User } from "../users/entities";
 import { CreateZikrDto, UpdateZikrDto } from "./dto";
 import { WebsocketGateway } from "../websocket/websocket.service";
 import { AdminGateway } from "../admin/admin.gateway";
+import { UsersService } from "../users/users.service";
 
 @Injectable()
 export class ZikrService {
@@ -22,10 +23,10 @@ export class ZikrService {
     private zikrCompletionRepository: Repository<ZikrCompletion>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
-    private dataSource: DataSource,
     private websocketGateway: WebsocketGateway,
     @Inject(forwardRef(() => AdminGateway))
     private adminGateway: AdminGateway,
+    private usersService: UsersService,
   ) {}
 
   // Bugungi kunning zikrlarini olish
@@ -209,89 +210,63 @@ export class ZikrService {
 
     const xpEarned = zikr.xpReward;
 
-    // Transaction bilan zikr completionni yaratish va user XP ni yangilash
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    // Zikr completion yaratish va XP ni addXP() orqali to'g'ri qo'shish
+    const completion = this.zikrCompletionRepository.create({
+      userId,
+      zikrId,
+      xpEarned,
+    });
+    await this.zikrCompletionRepository.save(completion);
 
-    try {
-      const completion = this.zikrCompletionRepository.create({
-        userId,
-        zikrId,
-        xpEarned,
-      });
-      await queryRunner.manager.save(completion);
+    // Zikr count qo'shish
+    await this.userRepository.increment(
+      { id: userId },
+      "zikrCount",
+      zikr.count,
+    );
+    await this.userRepository.update(userId, { lastActiveAt: new Date() });
 
-      await queryRunner.manager.increment(
-        User,
-        { id: userId },
-        "totalXP",
-        xpEarned,
-      );
-      // Zikr count qo'shish - zikrning soni bo'yicha (masalan 33 martalik zikr = 33 ta)
-      await queryRunner.manager.increment(
-        User,
-        { id: userId },
-        "zikrCount",
-        zikr.count,
-      );
-      await queryRunner.manager.update(
-        User,
-        { id: userId },
-        { lastActiveAt: new Date() },
-      );
+    // XP ni addXP() orqali qo'shish — level, weekly/monthly XP to'g'ri hisoblanadi
+    const xpResult = await this.usersService.addXP(userId, xpEarned);
+    const newLevel = xpResult.newLevel;
 
-      const user = await queryRunner.manager.findOne(User, {
-        where: { id: userId },
-      });
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
 
-      if (!user) {
-        throw new NotFoundException("Foydalanuvchi topilmadi");
-      }
-
-      await queryRunner.commitTransaction();
-
-      // Level yangilash (har 100 XP = 1 level)
-      const newLevel = Math.floor(user.totalXP / 100) + 1;
-      if (newLevel > user.level) {
-        await this.userRepository.update(userId, { level: newLevel });
-      }
-
-      // WebSocket notification yuborish
-      this.websocketGateway.completedZikrNotification({
-        id: zikr.id,
-        titleLatin: zikr.titleLatin,
-        user: { fullName: user.fullName, username: user.username },
-        completions: [completion],
-      });
-
-      // Admin panelga notification yuborish
-      this.adminGateway.notifyZikrCompleted({
-        id: zikr.id,
-        title: zikr.titleLatin,
-        emoji: zikr.emoji,
-        xpEarned,
-        user: {
-          id: user.id,
-          fullName: user.fullName,
-          username: user.username,
-        },
-        completedAt: new Date(),
-      });
-
-      return {
-        completion,
-        xpEarned,
-        totalXP: user.totalXP,
-        zikrCount: user.zikrCount,
-        level: newLevel,
-      };
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
+    if (!user) {
+      throw new NotFoundException("Foydalanuvchi topilmadi");
     }
+
+    // WebSocket notification yuborish
+    this.websocketGateway.completedZikrNotification({
+      id: zikr.id,
+      titleLatin: zikr.titleLatin,
+      user: { fullName: user.fullName, username: user.username },
+      completions: [completion],
+    });
+
+    // Admin panelga notification yuborish
+    this.adminGateway.notifyZikrCompleted({
+      id: zikr.id,
+      title: zikr.titleLatin,
+      emoji: zikr.emoji,
+      xpEarned,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        username: user.username,
+      },
+      completedAt: new Date(),
+    });
+
+    return {
+      completion,
+      xpEarned,
+      totalXP: user.totalXP,
+      zikrCount: user.zikrCount,
+      level: newLevel,
+    };
   }
 
   // User uchun bugungi zikr holatini olish
