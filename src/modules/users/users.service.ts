@@ -27,7 +27,7 @@ export class UsersService {
   ) {}
 
   private readonly LEVEL_THRESHOLDS = [
-    0, 100, 250, 500, 1000, 2000, 3500, 5500, 8500, 13000, 20000,
+    0, 1000, 2000, 5000, 10000, 20000,
   ];
 
   calculateLevel(totalXP: number): number {
@@ -243,20 +243,24 @@ export class UsersService {
     userId: string,
     xpAmount: number,
   ): Promise<{ newXP: number; newLevel: number; leveledUp: boolean }> {
+    // Atomik XP increment — race condition'ni oldini olish
+    await this.userRepository.increment({ id: userId }, "totalXP", xpAmount);
+
+    // Yangilangan userni olish
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
       throw new NotFoundException("Foydalanuvchi topilmadi");
     }
 
-    const newTotalXP = user.totalXP + xpAmount;
+    const newTotalXP = user.totalXP;
     const newLevel = this.calculateLevel(newTotalXP);
     const leveledUp = newLevel > user.level;
 
-    await this.userRepository.update(userId, {
-      totalXP: newTotalXP,
-      level: newLevel,
-    });
+    // Agar level o'zgargan bo'lsa, yangilash
+    if (newLevel !== user.level) {
+      await this.userRepository.update(userId, { level: newLevel });
+    }
 
     // Update weekly and monthly XP
     const now = new Date();

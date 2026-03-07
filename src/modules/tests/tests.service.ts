@@ -63,7 +63,11 @@ export class TestsService {
     // Server-side XP hisoblash — client ma'lumotlariga ishonmaymiz
     let serverScore = 0;
     let serverTotalXP = 0;
-    const verifiedAnswers: { questionId: string; selectedAnswer: number; isCorrect: boolean }[] = [];
+    const verifiedAnswers: {
+      questionId: string;
+      selectedAnswer: number;
+      isCorrect: boolean;
+    }[] = [];
 
     for (const answer of dto.answers) {
       const question = await this.questionRepository.findOne({
@@ -75,7 +79,7 @@ export class TestsService {
       const isCorrect = question.correctAnswer === answer.answer;
       if (isCorrect) {
         serverScore++;
-        serverTotalXP += question.xpReward;
+        serverTotalXP += 1; // Har bir to'g'ri javob uchun 1 XP
       }
 
       verifiedAnswers.push({
@@ -93,7 +97,10 @@ export class TestsService {
       categoryId: category?.id || null,
       totalQuestions,
       correctAnswers: serverScore,
-      score: totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+      score:
+        totalQuestions > 0
+          ? Math.round((serverScore / totalQuestions) * 100)
+          : 0,
       xpEarned: serverTotalXP,
       completedAt: new Date(),
     });
@@ -126,7 +133,9 @@ export class TestsService {
           serverScore,
           totalQuestions,
           serverTotalXP,
-          totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+          totalQuestions > 0
+            ? Math.round((serverScore / totalQuestions) * 100)
+            : 0,
         );
       }
 
@@ -139,7 +148,10 @@ export class TestsService {
       testAttemptId: testAttempt.id,
       score: serverScore,
       totalQuestions,
-      percentage: totalQuestions > 0 ? Math.round((serverScore / totalQuestions) * 100) : 0,
+      percentage:
+        totalQuestions > 0
+          ? Math.round((serverScore / totalQuestions) * 100)
+          : 0,
       xpEarned: serverTotalXP,
     };
   }

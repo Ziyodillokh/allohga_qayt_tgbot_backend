@@ -34,7 +34,9 @@ async function seedAdmin() {
       `UPDATE users SET password = $1, role = 'ADMIN', "isActive" = true WHERE username = $2`,
       [hashedPassword, username],
     );
-    console.log(`Admin "${username}" yangilandi (role=ADMIN, parol yangilandi)`);
+    console.log(
+      `Admin "${username}" yangilandi (role=ADMIN, parol yangilandi)`,
+    );
   } else {
     // Yangi admin yaratish
     await dataSource.query(

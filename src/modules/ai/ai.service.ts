@@ -78,7 +78,7 @@ export class AIService {
       throw new BadRequestException("Gemini API kaliti sozlanmagan");
     }
 
-    // Check daily limit (100 requests per user per day)
+    // Check daily limit (1 request per user per day)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -89,9 +89,9 @@ export class AIService {
       },
     });
 
-    if (todayCount >= 100) {
+    if (todayCount >= 1) {
       throw new BadRequestException(
-        "Kunlik so'rovlar limiti tugadi (100 ta). Ertaga qaytadan urinib ko'ring.",
+        "Kunlik AI so'rov limiti tugadi (1 ta). Ertaga qaytadan urinib ko'ring.",
       );
     }
 
@@ -211,7 +211,7 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
         response: aiResponse,
         category: aiChat?.category || null,
         createdAt: savedChat.createdAt,
-        remainingQueries: 100 - todayCount - 1,
+        remainingQueries: 1 - todayCount - 1,
       };
     } catch (error) {
       console.error("AI Error:", error);
@@ -262,8 +262,8 @@ MAVZULAR: Qur'on, Hadis, Fiqh, Aqida, Zikr, Duo, Namoz, Ro'za, Haj, Zakot, Islom
 
     return {
       used: count,
-      limit: 100,
-      remaining: Math.max(0, 100 - count),
+      limit: 1,
+      remaining: Math.max(0, 1 - count),
     };
   }
 

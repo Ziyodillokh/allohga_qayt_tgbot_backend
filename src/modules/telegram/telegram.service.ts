@@ -86,7 +86,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      // 1. Menu tugmasini Web App sifatida sozlash
+      // Menu tugmasini olib tashlash — faqat kanal obunasidan keyin /start orqali platformaga kirish
       const menuRes = await fetch(
         `https://api.telegram.org/bot${this.botToken}/setChatMenuButton`,
         {
@@ -94,16 +94,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             menu_button: {
-              type: "web_app",
-              text: "🕌 Platformani ochish",
-              web_app: { url: webappUrl },
+              type: "default",
             },
           }),
         },
       );
       const menuData = await menuRes.json();
       if (menuData.ok) {
-        this.logger.log(`✅ Web App menu button set: ${webappUrl}`);
+        this.logger.log(`✅ Menu button removed (default)`);
       }
 
       // 2. Bot descriptsiyasini yangilash

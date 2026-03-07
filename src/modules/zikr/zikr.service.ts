@@ -6,7 +6,7 @@ import {
   forwardRef,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, MoreThanOrEqual } from "typeorm";
+import { Repository, MoreThanOrEqual, DataSource } from "typeorm";
 import { Zikr, ZikrCompletion } from "./entities";
 import { User } from "../users/entities";
 import { CreateZikrDto, UpdateZikrDto } from "./dto";
@@ -27,6 +27,7 @@ export class ZikrService {
     @Inject(forwardRef(() => AdminGateway))
     private adminGateway: AdminGateway,
     private usersService: UsersService,
+    private dataSource: DataSource,
   ) {}
 
   // Bugungi kunning zikrlarini olish
@@ -110,8 +111,8 @@ export class ZikrService {
 
   // Yangi zikr yaratish
   async create(dto: CreateZikrDto) {
-    // XP ni avtomatik hisoblash: count >= 50 bo'lsa 2 XP, aks holda 1 XP
-    const xpReward = dto.xpReward ?? (dto.count >= 50 ? 2 : 1);
+    // XP = zikr soni (masalan 33 ta = 33 XP, 100 ta = 100 XP)
+    const xpReward = dto.xpReward ?? dto.count;
 
     const zikr = this.zikrRepository.create({
       titleArabic: dto.titleArabic,
@@ -206,67 +207,101 @@ export class ZikrService {
   async completeZikr(userId: string, zikrId: string) {
     const zikr = await this.findById(zikrId);
 
-    // Bugun tugallangan statusini frontendda ko'rsatish uchun, lekin XP va zikrCount har safar qo'shiladi
+    // Bugun allaqachon tugatilganligini tekshirish (XP farming oldini olish)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const xpEarned = zikr.xpReward;
-
-    // Zikr completion yaratish va XP ni addXP() orqali to'g'ri qo'shish
-    const completion = this.zikrCompletionRepository.create({
-      userId,
-      zikrId,
-      xpEarned,
-    });
-    await this.zikrCompletionRepository.save(completion);
-
-    // Zikr count qo'shish
-    await this.userRepository.increment(
-      { id: userId },
-      "zikrCount",
-      zikr.count,
-    );
-    await this.userRepository.update(userId, { lastActiveAt: new Date() });
-
-    // XP ni addXP() orqali qo'shish — level, weekly/monthly XP to'g'ri hisoblanadi
-    const xpResult = await this.usersService.addXP(userId, xpEarned);
-    const newLevel = xpResult.newLevel;
-
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
+    const existingCompletion = await this.zikrCompletionRepository.findOne({
+      where: {
+        userId,
+        zikrId,
+        completedAt: MoreThanOrEqual(today),
+      },
     });
 
-    if (!user) {
-      throw new NotFoundException("Foydalanuvchi topilmadi");
+    if (existingCompletion) {
+      throw new BadRequestException(
+        "Bu zikr bugun allaqachon tugatilgan. Ertaga qaytadan urinib ko'ring.",
+      );
     }
 
-    // WebSocket notification yuborish
-    this.websocketGateway.completedZikrNotification({
-      id: zikr.id,
-      titleLatin: zikr.titleLatin,
-      user: { fullName: user.fullName, username: user.username },
-      completions: [completion],
-    });
+    // XP = zikr soni (masalan 33 ta = 33 XP, 100 ta = 100 XP)
+    const xpEarned = zikr.count;
 
-    // Admin panelga notification yuborish
-    this.adminGateway.notifyZikrCompleted({
-      id: zikr.id,
-      title: zikr.titleLatin,
-      emoji: zikr.emoji,
-      xpEarned,
-      user: {
-        id: user.id,
-        fullName: user.fullName,
-        username: user.username,
-      },
-      completedAt: new Date(),
-    });
+    // Transaction ishlatish — barcha operatsiyalar birga amalga oshadi yoki bekor bo'ladi
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return {
-      completion,
-      xpEarned,
-      totalXP: user.totalXP,
-      zikrCount: user.zikrCount,
-      level: newLevel,
-    };
+    try {
+      // Zikr completion yaratish
+      const completion = this.zikrCompletionRepository.create({
+        userId,
+        zikrId,
+        xpEarned,
+      });
+      await queryRunner.manager.save(completion);
+
+      // Zikr count va lastActiveAt atomik yangilash
+      await queryRunner.manager.increment(
+        User,
+        { id: userId },
+        "zikrCount",
+        zikr.count,
+      );
+      await queryRunner.manager.update(User, userId, {
+        lastActiveAt: new Date(),
+      });
+
+      await queryRunner.commitTransaction();
+
+      // XP ni addXP() orqali qo'shish — level, weekly/monthly XP to'g'ri hisoblanadi
+      const xpResult = await this.usersService.addXP(userId, xpEarned);
+      const newLevel = xpResult.newLevel;
+
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+      });
+
+      if (!user) {
+        throw new NotFoundException("Foydalanuvchi topilmadi");
+      }
+
+      // WebSocket notification yuborish
+      this.websocketGateway.completedZikrNotification({
+        id: zikr.id,
+        titleLatin: zikr.titleLatin,
+        user: { fullName: user.fullName, username: user.username },
+        completions: [completion],
+      });
+
+      // Admin panelga notification yuborish
+      this.adminGateway.notifyZikrCompleted({
+        id: zikr.id,
+        title: zikr.titleLatin,
+        emoji: zikr.emoji,
+        xpEarned,
+        user: {
+          id: user.id,
+          fullName: user.fullName,
+          username: user.username,
+        },
+        completedAt: new Date(),
+      });
+
+      return {
+        completion,
+        xpEarned,
+        totalXP: user.totalXP,
+        zikrCount: user.zikrCount,
+        level: newLevel,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   // User uchun bugungi zikr holatini olish
@@ -305,11 +340,10 @@ export class ZikrService {
       where: { userId },
     });
 
-    // Total XP earned from zikr completions (join with zikrs to get xpReward)
+    // Total XP earned from zikr completions
     const totalXpEarned = await this.zikrCompletionRepository
       .createQueryBuilder("completion")
-      .innerJoin("completion.zikr", "zikr")
-      .select("COALESCE(SUM(zikr.xpReward), 0)", "sum")
+      .select("COALESCE(SUM(completion.xpEarned), 0)", "sum")
       .where("completion.userId = :userId", { userId })
       .getRawOne();
 
