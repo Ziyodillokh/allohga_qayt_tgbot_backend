@@ -123,8 +123,8 @@ export class ZikrService {
       count: dto.count,
       emoji: dto.emoji || "📿",
       dayOfWeek: dto.dayOfWeek,
-      isRamadan: dto.isRamadan || false,
-      order: dto.order || 0,
+      isRamadan: dto.isRamadan ?? false,
+      order: dto.order ?? 0,
       xpReward,
       isActive: dto.isActive ?? true,
     });
