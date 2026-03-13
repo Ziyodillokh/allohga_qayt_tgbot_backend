@@ -138,7 +138,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     while (this.pollingActive) {
       try {
         const res = await fetch(
-          `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.pollingOffset}&timeout=30&allowed_updates=["message","callback_query"]`,
+          `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.pollingOffset}&timeout=30&allowed_updates=["message","callback_query","channel_post"]`,
         );
         if (!res.ok) {
           await new Promise((r) => setTimeout(r, 5000));
@@ -821,8 +821,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `[WEBHOOK] Received update: ${JSON.stringify(update)}\n`,
       );
 
-      // Handle /start command
-      if (update.message?.text?.startsWith("/start")) {
+      // Normalize: channel_post → message (channels use channel_post instead of message)
+      if (update.channel_post && !update.message) {
+        update.message = update.channel_post;
+        // In channels, "from" may be absent — use sender_chat or skip
+        if (!update.message.from && update.message.sender_chat) {
+          update.message.from = {
+            id: update.message.sender_chat.id,
+            first_name: update.message.sender_chat.title || "Channel",
+            is_bot: true,
+          };
+        }
+      }
+
+      // Handle /start command (exact match only — not /starttest)
+      if (update.message?.text && /^\/start(@\w+)?$/i.test(update.message.text.trim())) {
         const chatId = update.message.chat.id;
         const from = update.message.from;
         const firstName = from.first_name;
@@ -893,15 +906,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (update.message?.text && /^\/starttest(\d*)$/i.test(update.message.text.split("@")[0].trim())) {
         const chatId = update.message.chat.id;
         const from = update.message.from;
+        const chatType = update.message.chat.type;
         const cmdText = update.message.text.split("@")[0].trim();
 
-        // Check if user is chat admin/creator
-        const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
-        if (!isChatAdmin) {
-          await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
-            parse_mode: "HTML",
-          });
-          return { ok: true };
+        // In channels, whoever can post IS an admin — skip getChatMember check
+        // In groups/supergroups, check admin status via getChatMember
+        // In private chats, allow (for testing)
+        if (chatType === "group" || chatType === "supergroup") {
+          const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
+          if (!isChatAdmin) {
+            await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
+              parse_mode: "HTML",
+            });
+            return { ok: true };
+          }
         }
 
         // Parse number of questions from command
@@ -938,27 +956,64 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (update.message?.text && /^\/stoptest$/i.test(update.message.text.split("@")[0].trim())) {
         const chatId = update.message.chat.id;
         const from = update.message.from;
+        const chatType = update.message.chat.type;
 
-        // Check if user is chat admin/creator
-        const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
-        if (!isChatAdmin) {
-          await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
-            parse_mode: "HTML",
-          });
-          return { ok: true };
+        // In groups/supergroups, check admin status; in channels/private — allow
+        if (chatType === "group" || chatType === "supergroup") {
+          const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
+          if (!isChatAdmin) {
+            await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
+              parse_mode: "HTML",
+            });
+            return { ok: true };
+          }
         }
 
         const stopped = await this.quizService.stopQuiz(chatId.toString());
-        if (stopped) {
-          await this.sendMessage(chatId, "🛑 Quiz admin tomonidan to'xtatildi.", {
-            parse_mode: "HTML",
-          });
-        } else {
+        if (!stopped) {
           await this.sendMessage(chatId, "Hozir hech qanday quiz ishlamayapti.", {
             parse_mode: "HTML",
           });
         }
 
+        return { ok: true };
+      }
+
+      // Handle /clean command — delete quiz messages
+      if (update.message?.text && /^\/clean$/i.test(update.message.text.split("@")[0].trim())) {
+        const chatId = update.message.chat.id;
+        const from = update.message.from;
+        const chatType = update.message.chat.type;
+
+        if (chatType === "group" || chatType === "supergroup") {
+          const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
+          if (!isChatAdmin) {
+            await this.sendMessage(chatId, "⛔ Bu buyruq faqat adminlar uchun.", {
+              parse_mode: "HTML",
+            });
+            return { ok: true };
+          }
+        }
+
+        const deleted = await this.quizService.cleanQuizMessages(chatId.toString());
+        if (deleted > 0) {
+          await this.sendMessage(chatId, `🧹 ${deleted} ta quiz xabari o'chirildi.`, {
+            parse_mode: "HTML",
+          });
+        } else {
+          await this.sendMessage(chatId, "O'chiriladigan quiz xabarlari topilmadi.", {
+            parse_mode: "HTML",
+          });
+        }
+
+        return { ok: true };
+      }
+
+      // Handle /rayting command — all-time leaderboard
+      if (update.message?.text && /^\/rayting$/i.test(update.message.text.split("@")[0].trim())) {
+        const chatId = update.message.chat.id;
+        const text = await this.quizService.getLeaderboardText();
+        await this.sendMessage(chatId, text, { parse_mode: "HTML" });
         return { ok: true };
       }
 

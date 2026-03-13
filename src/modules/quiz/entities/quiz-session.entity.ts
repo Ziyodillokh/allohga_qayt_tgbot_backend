@@ -21,4 +21,7 @@ export class QuizSession {
 
   @Column({ type: "timestamp", nullable: true })
   finishedAt: Date | null;
+
+  @Column({ type: "text", default: "[]" })
+  messageIds: string;
 }

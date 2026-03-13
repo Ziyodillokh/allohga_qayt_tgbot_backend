@@ -9,23 +9,31 @@ import { ConfigService } from "@nestjs/config";
 import { QuizQuestion } from "./entities/quiz-question.entity";
 import { QuizSession } from "./entities/quiz-session.entity";
 import { QuizAnswer } from "./entities/quiz-answer.entity";
+import { QuizSettings } from "./entities/quiz-settings.entity";
 
 interface ActiveQuizState {
   sessionId: string;
   chatId: string;
   questions: QuizQuestion[];
   currentIndex: number;
-  questionSentAt: number; // timestamp ms
+  questionSentAt: number;
   answersClosed: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   nextTimer: ReturnType<typeof setTimeout> | null;
+  countdownTimers: ReturnType<typeof setTimeout>[];
+  currentMessageId: number | null;
+  messageIds: number[];
+  answerTimeSeconds: number;
+  waitTimeSeconds: number;
 }
 
 @Injectable()
 export class QuizService {
   private readonly logger = new Logger(QuizService.name);
-  private activeQuizzes: Map<string, ActiveQuizState> = new Map(); // chatId -> state
+  private activeQuizzes: Map<string, ActiveQuizState> = new Map();
   private botToken: string;
+  // Keep messageIds after quiz ends for /clean
+  private chatMessageIds: Map<string, number[]> = new Map();
 
   constructor(
     @InjectRepository(QuizQuestion)
@@ -34,22 +42,44 @@ export class QuizService {
     private quizSessionRepo: Repository<QuizSession>,
     @InjectRepository(QuizAnswer)
     private quizAnswerRepo: Repository<QuizAnswer>,
+    @InjectRepository(QuizSettings)
+    private quizSettingsRepo: Repository<QuizSettings>,
     private configService: ConfigService,
   ) {
     this.botToken = this.configService.get<string>("TELEGRAM_BOT_TOKEN") || "";
   }
 
+  // ==================== SETTINGS ====================
+
+  async getSettings(): Promise<QuizSettings> {
+    let settings = await this.quizSettingsRepo.findOne({ where: { id: 1 } });
+    if (!settings) {
+      settings = this.quizSettingsRepo.create({
+        id: 1,
+        answerTimeSeconds: 15,
+        waitTimeSeconds: 45,
+      });
+      settings = await this.quizSettingsRepo.save(settings);
+    }
+    return settings;
+  }
+
+  async updateSettings(data: {
+    answerTimeSeconds?: number;
+    waitTimeSeconds?: number;
+  }): Promise<QuizSettings> {
+    let settings = await this.getSettings();
+    if (data.answerTimeSeconds !== undefined) {
+      settings.answerTimeSeconds = Math.max(5, Math.min(120, data.answerTimeSeconds));
+    }
+    if (data.waitTimeSeconds !== undefined) {
+      settings.waitTimeSeconds = Math.max(5, Math.min(300, data.waitTimeSeconds));
+    }
+    return this.quizSettingsRepo.save(settings);
+  }
+
   // ==================== ADMIN: QUESTION MANAGEMENT ====================
 
-  /**
-   * Parse and import quiz questions from text.
-   * Format:
-   * 1.{Question text}:
-   * a) Option A
-   * b) Option B
-   * (d) Option D    <-- correct answer has parentheses
-   * c) Option C
-   */
   async importQuestions(text: string): Promise<{
     imported: number;
     skipped: number;
@@ -63,7 +93,6 @@ export class QuizService {
       );
     }
 
-    // Check for duplicates in DB
     const existingQuestions = await this.quizQuestionRepo.find({
       select: ["questionText"],
     });
@@ -133,29 +162,21 @@ export class QuizService {
     const saveCurrentQuestion = () => {
       if (!currentQuestionText) return;
 
-      // Remove trailing colon from question text
       currentQuestionText = currentQuestionText.replace(/:\s*$/, "").trim();
 
       if (!options["a"] || !options["b"] || !options["c"] || !options["d"]) {
-        errors.push(
-          `Savol #${currentQuestionNum}: 4 ta variant topilmadi`,
-        );
+        errors.push(`Savol #${currentQuestionNum}: 4 ta variant topilmadi`);
         return;
       }
       if (!correctOption) {
-        errors.push(
-          `Savol #${currentQuestionNum}: To'g'ri javob belgilanmagan`,
-        );
+        errors.push(`Savol #${currentQuestionNum}: To'g'ri javob belgilanmagan`);
         return;
       }
 
-      // Check for duplicate options
       const optionValues = [options["a"], options["b"], options["c"], options["d"]];
       const uniqueOptions = new Set(optionValues.map((o) => o.toLowerCase().trim()));
       if (uniqueOptions.size < 4) {
-        errors.push(
-          `Savol #${currentQuestionNum}: Takroriy variantlar mavjud`,
-        );
+        errors.push(`Savol #${currentQuestionNum}: Takroriy variantlar mavjud`);
         return;
       }
 
@@ -173,12 +194,9 @@ export class QuizService {
       const line = lines[i].trim();
       if (!line) continue;
 
-      // Check if it's a question number (e.g., "1.", "1.Question text", "1.{Question text}:")
       const questionMatch = line.match(/^(\d+)\.\s*\{?\s*(.+)$/);
       if (questionMatch) {
-        // Save previous question
         saveCurrentQuestion();
-
         currentQuestionNum = parseInt(questionMatch[1]);
         currentQuestionText = questionMatch[2].replace(/\}\s*:?\s*$/, "").trim();
         options = {};
@@ -186,7 +204,6 @@ export class QuizService {
         continue;
       }
 
-      // Check for option with parentheses = correct answer: (a) Option text
       const correctOptionMatch = line.match(/^\(([a-dA-D])\)\s*(.+)$/);
       if (correctOptionMatch) {
         const letter = correctOptionMatch[1].toLowerCase();
@@ -196,7 +213,6 @@ export class QuizService {
         continue;
       }
 
-      // Check for regular option: a) Option text or A) Option text
       const optionMatch = line.match(/^([a-dA-D])\)\s*(.+)$/);
       if (optionMatch) {
         const letter = optionMatch[1].toLowerCase();
@@ -205,16 +221,13 @@ export class QuizService {
         continue;
       }
 
-      // If we're in a question, append to question text (multi-line questions)
       if (currentQuestionText && !correctOption && Object.keys(options).length === 0) {
         const cleaned = line.replace(/\}\s*:?\s*$/, "").trim();
         currentQuestionText += " " + cleaned;
       }
     }
 
-    // Save last question
     saveCurrentQuestion();
-
     return { questions, errors };
   }
 
@@ -230,12 +243,7 @@ export class QuizService {
       take: limit,
     });
 
-    return {
-      questions,
-      total,
-      page,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { questions, total, page, totalPages: Math.ceil(total / limit) };
   }
 
   async deleteQuestion(id: string): Promise<void> {
@@ -252,15 +260,48 @@ export class QuizService {
     return this.quizQuestionRepo.count();
   }
 
+  // ==================== LEADERBOARD ====================
+
+  async getLeaderboard(limit = 10): Promise<
+    Array<{
+      userId: string;
+      username: string | null;
+      correctCount: number;
+      totalAnswers: number;
+      accuracy: number;
+    }>
+  > {
+    const results = await this.quizAnswerRepo
+      .createQueryBuilder("a")
+      .select("a.userId", "userId")
+      .addSelect("MAX(a.username)", "username")
+      .addSelect("SUM(CASE WHEN a.isCorrect = true THEN 1 ELSE 0 END)", "correctCount")
+      .addSelect("COUNT(*)", "totalAnswers")
+      .groupBy("a.userId")
+      .orderBy('"correctCount"', "DESC")
+      .addOrderBy('"totalAnswers"', "DESC")
+      .limit(limit)
+      .getRawMany();
+
+    return results.map((r) => ({
+      userId: r.userId,
+      username: r.username,
+      correctCount: parseInt(r.correctCount) || 0,
+      totalAnswers: parseInt(r.totalAnswers) || 0,
+      accuracy:
+        parseInt(r.totalAnswers) > 0
+          ? Math.round((parseInt(r.correctCount) / parseInt(r.totalAnswers)) * 100)
+          : 0,
+    }));
+  }
+
   // ==================== QUIZ SESSION LOGIC ====================
 
   async startQuiz(chatId: string, numQuestions: number): Promise<string> {
-    // Check if quiz already running in this chat
     if (this.activeQuizzes.has(chatId)) {
       return "quiz_already_running";
     }
 
-    // Check available questions
     const totalAvailable = await this.quizQuestionRepo.count();
     if (totalAvailable === 0) {
       return "no_questions";
@@ -270,19 +311,19 @@ export class QuizService {
       numQuestions = totalAvailable;
     }
 
-    // Randomly select questions
     const allQuestions = await this.quizQuestionRepo.find();
     const shuffled = this.shuffleArray([...allQuestions]);
     const selected = shuffled.slice(0, numQuestions);
 
-    // Create session in DB
+    // Load settings
+    const settings = await this.getSettings();
+
     const session = this.quizSessionRepo.create({
       chatId,
       totalQuestions: selected.length,
     });
     const savedSession = await this.quizSessionRepo.save(session);
 
-    // Set up active state
     const state: ActiveQuizState = {
       sessionId: savedSession.id,
       chatId,
@@ -292,21 +333,101 @@ export class QuizService {
       answersClosed: true,
       timer: null,
       nextTimer: null,
+      countdownTimers: [],
+      currentMessageId: null,
+      messageIds: [],
+      answerTimeSeconds: settings.answerTimeSeconds,
+      waitTimeSeconds: settings.waitTimeSeconds,
     };
 
     this.activeQuizzes.set(chatId, state);
+    this.chatMessageIds.set(chatId, []);
 
-    // Send first question immediately
-    this.sendQuestion(chatId);
+    // Send quiz start announcement
+    const startText =
+      `🏁 <b>QUIZ BOSHLANDI!</b>\n\n` +
+      `📊 Savollar soni: <b>${selected.length}</b>\n` +
+      `⏱ Har bir savol: <b>${settings.answerTimeSeconds} sekund</b>\n` +
+      `⏳ Savollar oralig'i: <b>${settings.answerTimeSeconds + settings.waitTimeSeconds} sekund</b>\n\n` +
+      `🔵 Tayyor bo'ling! Birinchi savol kelmoqda...`;
+
+    const startMsg = await this.sendTelegramMessage(chatId, startText, {
+      parse_mode: "HTML",
+    });
+    if (startMsg) {
+      state.messageIds.push(startMsg);
+      this.chatMessageIds.get(chatId)?.push(startMsg);
+    }
+
+    // Send first question after 3 seconds
+    state.nextTimer = setTimeout(() => {
+      this.sendQuestion(chatId);
+    }, 3000);
 
     return "started";
   }
 
-  /**
-   * Callback data format: "qa:{questionIndex}:{option}"
-   * Short enough for Telegram's 64-byte limit.
-   * We look up the active quiz by chatId (only one quiz per chat).
-   */
+  private buildQuestionText(
+    question: QuizQuestion,
+    questionNum: number,
+    total: number,
+    remainingSeconds: number,
+    answerTimeSeconds: number,
+    showAnswer = false,
+    stats?: { total: number; correct: number },
+  ): string {
+    const options = [
+      { letter: "A", text: question.optionA, key: "a" },
+      { letter: "B", text: question.optionB, key: "b" },
+      { letter: "C", text: question.optionC, key: "c" },
+      { letter: "D", text: question.optionD, key: "d" },
+    ];
+
+    let text = `━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `📊 <b>SAVOL ${questionNum}/${total}</b>\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+    text += `❓ <b>${question.questionText}</b>\n\n`;
+
+    for (const opt of options) {
+      if (showAnswer && opt.key === question.correctOption) {
+        text += `✅ <b>${opt.letter}) ${opt.text}</b>\n`;
+      } else if (showAnswer) {
+        text += `▫️ ${opt.letter}) ${opt.text}\n`;
+      } else {
+        text += `🔹 ${opt.letter}) ${opt.text}\n`;
+      }
+    }
+
+    text += `\n`;
+
+    if (showAnswer) {
+      const incorrect = (stats?.total || 0) - (stats?.correct || 0);
+      text += `━━━━━━━━━━━━━━━━━━━━\n`;
+      text += `📈 Javoblar: ${stats?.total || 0} | ✅ ${stats?.correct || 0} | ❌ ${incorrect}\n`;
+      text += `⏰ Vaqt tugadi!`;
+    } else {
+      const bar = this.getProgressBar(remainingSeconds, answerTimeSeconds);
+      const clockEmoji = this.getClockEmoji(remainingSeconds, answerTimeSeconds);
+      text += `${clockEmoji} ${bar} <b>${remainingSeconds}s</b>`;
+    }
+
+    return text;
+  }
+
+  private getProgressBar(remaining: number, total: number): string {
+    const totalBlocks = 15;
+    const filled = Math.max(0, Math.round((remaining / total) * totalBlocks));
+    const empty = totalBlocks - filled;
+    return "▓".repeat(filled) + "░".repeat(empty);
+  }
+
+  private getClockEmoji(remaining: number, total: number): string {
+    const ratio = remaining / total;
+    if (ratio > 0.66) return "🟢";
+    if (ratio > 0.33) return "🟡";
+    return "🔴";
+  }
+
   private async sendQuestion(chatId: string) {
     const state = this.activeQuizzes.get(chatId);
     if (!state) return;
@@ -316,35 +437,111 @@ export class QuizService {
     const total = state.questions.length;
     const idx = state.currentIndex;
 
-    const text =
-      `📊 <b>QUIZ #${questionNum}/${total}</b>\n\n` +
-      `${question.questionText}\n\n` +
-      `A) ${question.optionA}\n` +
-      `B) ${question.optionB}\n` +
-      `C) ${question.optionC}\n` +
-      `D) ${question.optionD}`;
+    const text = this.buildQuestionText(
+      question,
+      questionNum,
+      total,
+      state.answerTimeSeconds,
+      state.answerTimeSeconds,
+    );
 
     const inlineKeyboard = [
       [
-        { text: "A", callback_data: `qa:${idx}:a` },
-        { text: "B", callback_data: `qa:${idx}:b` },
-        { text: "C", callback_data: `qa:${idx}:c` },
-        { text: "D", callback_data: `qa:${idx}:d` },
+        { text: "🔵 A", callback_data: `qa:${idx}:a` },
+        { text: "🔵 B", callback_data: `qa:${idx}:b` },
+      ],
+      [
+        { text: "🔵 C", callback_data: `qa:${idx}:c` },
+        { text: "🔵 D", callback_data: `qa:${idx}:d` },
       ],
     ];
 
-    await this.sendTelegramMessage(chatId, text, {
+    const msgId = await this.sendTelegramMessage(chatId, text, {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: inlineKeyboard },
     });
 
     state.questionSentAt = Date.now();
     state.answersClosed = false;
+    state.currentMessageId = msgId;
 
-    // Close answers after 15 seconds
+    if (msgId) {
+      state.messageIds.push(msgId);
+      this.chatMessageIds.get(chatId)?.push(msgId);
+    }
+
+    // Schedule countdown updates
+    this.scheduleCountdown(chatId);
+  }
+
+  private scheduleCountdown(chatId: string) {
+    const state = this.activeQuizzes.get(chatId);
+    if (!state) return;
+
+    // Clear any existing countdown timers
+    for (const t of state.countdownTimers) {
+      clearTimeout(t);
+    }
+    state.countdownTimers = [];
+
+    const answerTime = state.answerTimeSeconds;
+
+    // Update at 2/3 and 1/3 remaining, and close at 0
+    const updatePoints = [
+      Math.round(answerTime * 0.33), // 2/3 elapsed → 1/3 remaining
+      Math.round(answerTime * 0.66), // 1/3 elapsed → 2/3 remaining
+    ].sort((a, b) => a - b);
+
+    for (const elapsed of updatePoints) {
+      if (elapsed > 0 && elapsed < answerTime) {
+        const timer = setTimeout(() => {
+          this.updateCountdownMessage(chatId);
+        }, elapsed * 1000);
+        state.countdownTimers.push(timer);
+      }
+    }
+
+    // Close answers at the end
     state.timer = setTimeout(() => {
       this.closeAnswers(chatId);
-    }, 15000);
+    }, answerTime * 1000);
+  }
+
+  private async updateCountdownMessage(chatId: string) {
+    const state = this.activeQuizzes.get(chatId);
+    if (!state || state.answersClosed || !state.currentMessageId) return;
+
+    const elapsed = Math.floor((Date.now() - state.questionSentAt) / 1000);
+    const remaining = Math.max(0, state.answerTimeSeconds - elapsed);
+
+    const question = state.questions[state.currentIndex];
+    const questionNum = state.currentIndex + 1;
+    const total = state.questions.length;
+
+    const text = this.buildQuestionText(
+      question,
+      questionNum,
+      total,
+      remaining,
+      state.answerTimeSeconds,
+    );
+
+    const idx = state.currentIndex;
+    const inlineKeyboard = [
+      [
+        { text: "🔵 A", callback_data: `qa:${idx}:a` },
+        { text: "🔵 B", callback_data: `qa:${idx}:b` },
+      ],
+      [
+        { text: "🔵 C", callback_data: `qa:${idx}:c` },
+        { text: "🔵 D", callback_data: `qa:${idx}:d` },
+      ],
+    ];
+
+    await this.editTelegramMessage(chatId, state.currentMessageId, text, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: inlineKeyboard },
+    });
   }
 
   private async closeAnswers(chatId: string) {
@@ -353,16 +550,13 @@ export class QuizService {
 
     state.answersClosed = true;
 
+    // Clear countdown timers
+    for (const t of state.countdownTimers) {
+      clearTimeout(t);
+    }
+    state.countdownTimers = [];
+
     const question = state.questions[state.currentIndex];
-    const correctLetter = question.correctOption.toUpperCase();
-    const correctText =
-      correctLetter === "A"
-        ? question.optionA
-        : correctLetter === "B"
-          ? question.optionB
-          : correctLetter === "C"
-            ? question.optionC
-            : question.optionD;
 
     // Count answers for this question
     const answers = await this.quizAnswerRepo.find({
@@ -374,35 +568,45 @@ export class QuizService {
 
     const correctCount = answers.filter((a) => a.isCorrect).length;
     const totalAnswers = answers.length;
+    const questionNum = state.currentIndex + 1;
+    const total = state.questions.length;
 
-    const text =
-      `✅ <b>To'g'ri javob: ${correctLetter}) ${correctText}</b>\n\n` +
-      `📈 Javob berganlar: ${totalAnswers}\n` +
-      `✅ To'g'ri: ${correctCount} | ❌ Noto'g'ri: ${totalAnswers - correctCount}`;
+    // Edit the question message to show the correct answer
+    const text = this.buildQuestionText(
+      question,
+      questionNum,
+      total,
+      0,
+      state.answerTimeSeconds,
+      true,
+      { total: totalAnswers, correct: correctCount },
+    );
 
-    await this.sendTelegramMessage(chatId, text, { parse_mode: "HTML" });
+    if (state.currentMessageId) {
+      // Remove buttons and show answer
+      await this.editTelegramMessage(chatId, state.currentMessageId, text, {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      });
+    }
+
+    // Save messageIds to DB periodically
+    await this.saveMessageIds(state);
 
     // Check if this was the last question
     if (state.currentIndex >= state.questions.length - 1) {
-      // Quiz finished - show results after a short delay
       state.nextTimer = setTimeout(() => {
         this.finishQuiz(chatId);
-      }, 3000);
+      }, 5000);
     } else {
-      // Schedule next question: wait until the next minute mark
-      // (60 seconds from when question was sent, minus 15 seconds already passed = 45 seconds)
+      // Schedule next question
       state.nextTimer = setTimeout(() => {
         state.currentIndex++;
         this.sendQuestion(chatId);
-      }, 45000);
+      }, state.waitTimeSeconds * 1000);
     }
   }
 
-  /**
-   * Handle quiz answer from callback query.
-   * Called from TelegramService when callback_data starts with "qa:".
-   * chatId is used to find the active quiz.
-   */
   async handleQuizAnswer(
     chatId: string,
     questionIndex: number,
@@ -419,11 +623,10 @@ export class QuizService {
     }
 
     if (state.answersClosed) {
-      await this.answerCallback(callbackQueryId, "Vaqt tugadi! ⏰", true);
+      await this.answerCallback(callbackQueryId, "⏰ Vaqt tugadi!", true);
       return;
     }
 
-    // Check if current question matches
     if (state.currentIndex !== questionIndex) {
       await this.answerCallback(callbackQueryId, "Bu savol endi aktiv emas.", true);
       return;
@@ -431,7 +634,6 @@ export class QuizService {
 
     const currentQuestion = state.questions[state.currentIndex];
 
-    // Check if user already answered this question
     const existing = await this.quizAnswerRepo.findOne({
       where: {
         quizSessionId: state.sessionId,
@@ -448,7 +650,6 @@ export class QuizService {
     const isCorrect = option === currentQuestion.correctOption;
     const responseTime = Date.now() - state.questionSentAt;
 
-    // Save answer
     const answer = this.quizAnswerRepo.create({
       quizSessionId: state.sessionId,
       questionId: currentQuestion.id,
@@ -460,25 +661,22 @@ export class QuizService {
     });
     await this.quizAnswerRepo.save(answer);
 
-    const emoji = isCorrect ? "✅" : "❌";
-    await this.answerCallback(callbackQueryId, `${emoji} Javobingiz qabul qilindi!`, false);
+    // Don't reveal if correct or not — just confirm received
+    await this.answerCallback(callbackQueryId, "✅ Javobingiz qabul qilindi!", false);
   }
 
   private async finishQuiz(chatId: string) {
     const state = this.activeQuizzes.get(chatId);
     if (!state) return;
 
-    // Mark session as finished
     await this.quizSessionRepo.update(state.sessionId, {
       finishedAt: new Date(),
     });
 
-    // Calculate rankings
     const answers = await this.quizAnswerRepo.find({
       where: { quizSessionId: state.sessionId },
     });
 
-    // Group by user
     const userScores: Map<
       string,
       { username: string | null; correct: number; totalTime: number }
@@ -490,17 +688,12 @@ export class QuizService {
         correct: 0,
         totalTime: 0,
       };
-      if (answer.isCorrect) {
-        existing.correct++;
-      }
+      if (answer.isCorrect) existing.correct++;
       existing.totalTime += parseInt(answer.responseTime) || 0;
-      if (answer.username) {
-        existing.username = answer.username;
-      }
+      if (answer.username) existing.username = answer.username;
       userScores.set(answer.userId, existing);
     }
 
-    // Sort by correct answers DESC, then by total time ASC
     const ranked = Array.from(userScores.entries())
       .map(([userId, data]) => ({
         userId,
@@ -513,29 +706,44 @@ export class QuizService {
         return a.totalTime - b.totalTime;
       });
 
-    // Build results message
-    let resultText = `🏆 <b>QUIZ NATIJALARI</b>\n\n`;
-    resultText += `📊 Jami savollar: ${state.questions.length}\n`;
-    resultText += `👥 Ishtirokchilar: ${ranked.length}\n\n`;
+    let resultText = `\n🏆 <b>QUIZ NATIJALARI</b>\n`;
+    resultText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+    resultText += `📊 Jami savollar: <b>${state.questions.length}</b>\n`;
+    resultText += `👥 Ishtirokchilar: <b>${ranked.length}</b>\n\n`;
 
     if (ranked.length === 0) {
-      resultText += "Hech kim javob bermadi.";
+      resultText += "😔 Hech kim javob bermadi.\n";
     } else {
       const medals = ["🥇", "🥈", "🥉"];
 
-      for (let i = 0; i < ranked.length; i++) {
+      for (let i = 0; i < Math.min(ranked.length, 20); i++) {
         const r = ranked[i];
-        const medal = i < 3 ? medals[i] : `${i + 1}.`;
-        const displayName = r.username ? `@${r.username}` : `User ${r.userId}`;
-        resultText += `${medal} ${displayName} — ${r.correct}/${state.questions.length} to'g'ri\n`;
+        const medal = i < 3 ? medals[i] : `<b>${i + 1}.</b>`;
+        const displayName = r.username ? `@${r.username}` : `Foydalanuvchi`;
+        const timeStr = (r.totalTime / 1000).toFixed(1);
+        resultText += `${medal} ${displayName} — <b>${r.correct}/${state.questions.length}</b> ✅ (${timeStr}s)\n`;
       }
     }
 
-    await this.sendTelegramMessage(chatId, resultText, { parse_mode: "HTML" });
+    resultText += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+    resultText += `💡 /clean — Quiz xabarlarini tozalash\n`;
+    resultText += `💡 /rayting — Umumiy reyting (TOP 10)`;
 
-    // Clean up
+    const msgId = await this.sendTelegramMessage(chatId, resultText, {
+      parse_mode: "HTML",
+    });
+    if (msgId) {
+      state.messageIds.push(msgId);
+      this.chatMessageIds.get(chatId)?.push(msgId);
+    }
+
+    // Save final messageIds to DB
+    await this.saveMessageIds(state);
+
+    // Clean up timers
     if (state.timer) clearTimeout(state.timer);
     if (state.nextTimer) clearTimeout(state.nextTimer);
+    for (const t of state.countdownTimers) clearTimeout(t);
     this.activeQuizzes.delete(chatId);
   }
 
@@ -543,23 +751,18 @@ export class QuizService {
     return this.activeQuizzes.has(chatId);
   }
 
-  /**
-   * Stop an active quiz. Returns true if a quiz was stopped, false if none was running.
-   */
   async stopQuiz(chatId: string): Promise<boolean> {
     const state = this.activeQuizzes.get(chatId);
     if (!state) return false;
 
-    // Clear timers
     if (state.timer) clearTimeout(state.timer);
     if (state.nextTimer) clearTimeout(state.nextTimer);
+    for (const t of state.countdownTimers) clearTimeout(t);
 
-    // Mark session as finished in DB
     await this.quizSessionRepo.update(state.sessionId, {
       finishedAt: new Date(),
     });
 
-    // Show partial results if any answers exist
     const answers = await this.quizAnswerRepo.find({
       where: { quizSessionId: state.sessionId },
     });
@@ -596,23 +799,96 @@ export class QuizService {
 
       const answeredQuestions = state.currentIndex + (state.answersClosed ? 1 : 0);
 
-      let resultText = `🏆 <b>QUIZ NATIJALARI (to'xtatildi)</b>\n\n`;
-      resultText += `📊 Javob berilgan savollar: ${answeredQuestions}/${state.questions.length}\n`;
-      resultText += `👥 Ishtirokchilar: ${ranked.length}\n\n`;
+      let resultText = `\n🛑 <b>QUIZ TO'XTATILDI</b>\n`;
+      resultText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+      resultText += `📊 Javob berilgan savollar: <b>${answeredQuestions}/${state.questions.length}</b>\n`;
+      resultText += `👥 Ishtirokchilar: <b>${ranked.length}</b>\n\n`;
 
       const medals = ["🥇", "🥈", "🥉"];
-      for (let i = 0; i < ranked.length; i++) {
+      for (let i = 0; i < Math.min(ranked.length, 20); i++) {
         const r = ranked[i];
-        const medal = i < 3 ? medals[i] : `${i + 1}.`;
-        const displayName = r.username ? `@${r.username}` : `User ${r.userId}`;
-        resultText += `${medal} ${displayName} — ${r.correct} to'g'ri\n`;
+        const medal = i < 3 ? medals[i] : `<b>${i + 1}.</b>`;
+        const displayName = r.username ? `@${r.username}` : `Foydalanuvchi`;
+        const timeStr = (r.totalTime / 1000).toFixed(1);
+        resultText += `${medal} ${displayName} — <b>${r.correct}</b> ✅ (${timeStr}s)\n`;
       }
 
-      await this.sendTelegramMessage(chatId, resultText, { parse_mode: "HTML" });
+      resultText += `\n💡 /clean — Quiz xabarlarini tozalash`;
+
+      const msgId = await this.sendTelegramMessage(chatId, resultText, {
+        parse_mode: "HTML",
+      });
+      if (msgId) {
+        state.messageIds.push(msgId);
+        this.chatMessageIds.get(chatId)?.push(msgId);
+      }
     }
+
+    // Save messageIds to DB
+    await this.saveMessageIds(state);
 
     this.activeQuizzes.delete(chatId);
     return true;
+  }
+
+  // ==================== /clean — Delete quiz messages ====================
+
+  async cleanQuizMessages(chatId: string): Promise<number> {
+    // Get from memory first
+    let messageIds = this.chatMessageIds.get(chatId) || [];
+
+    // If not in memory, try to load from the last session
+    if (messageIds.length === 0) {
+      const lastSession = await this.quizSessionRepo.findOne({
+        where: { chatId },
+        order: { startedAt: "DESC" },
+      });
+      if (lastSession && lastSession.messageIds) {
+        try {
+          messageIds = JSON.parse(lastSession.messageIds);
+        } catch {
+          messageIds = [];
+        }
+      }
+    }
+
+    let deleted = 0;
+    for (const msgId of messageIds) {
+      const success = await this.deleteTelegramMessage(chatId, msgId);
+      if (success) deleted++;
+    }
+
+    // Clear stored IDs
+    this.chatMessageIds.delete(chatId);
+
+    return deleted;
+  }
+
+  // ==================== /rayting — All-time leaderboard message ====================
+
+  async getLeaderboardText(): Promise<string> {
+    const leaders = await this.getLeaderboard(10);
+
+    let text = `🏆 <b>UMUMIY REYTING (TOP 10)</b>\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (leaders.length === 0) {
+      text += "Hali hech kim quiz o'ynamagan.\n";
+    } else {
+      const medals = ["🥇", "🥈", "🥉"];
+
+      for (let i = 0; i < leaders.length; i++) {
+        const l = leaders[i];
+        const medal = i < 3 ? medals[i] : `<b>${i + 1}.</b>`;
+        const displayName = l.username ? `@${l.username}` : `Foydalanuvchi`;
+        text += `${medal} ${displayName} — <b>${l.correctCount}</b> ✅ to'g'ri (${l.accuracy}%)\n`;
+      }
+    }
+
+    text += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `📊 Barcha quiz natijalari asosida`;
+
+    return text;
   }
 
   // ==================== SESSION HISTORY ====================
@@ -629,15 +905,20 @@ export class QuizService {
       take: limit,
     });
 
-    return {
-      sessions,
-      total,
-      page,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { sessions, total, page, totalPages: Math.ceil(total / limit) };
   }
 
-  // ==================== TELEGRAM HELPERS ====================
+  // ==================== HELPERS ====================
+
+  private async saveMessageIds(state: ActiveQuizState) {
+    try {
+      await this.quizSessionRepo.update(state.sessionId, {
+        messageIds: JSON.stringify(state.messageIds),
+      });
+    } catch (err) {
+      this.logger.error(`Failed to save messageIds: ${err.message}`);
+    }
+  }
 
   private async sendTelegramMessage(
     chatId: string,
@@ -646,8 +927,8 @@ export class QuizService {
       parse_mode?: string;
       reply_markup?: any;
     },
-  ) {
-    if (!this.botToken) return;
+  ): Promise<number | null> {
+    if (!this.botToken) return null;
 
     try {
       const res = await fetch(
@@ -665,9 +946,74 @@ export class QuizService {
       const data = await res.json();
       if (!data.ok) {
         this.logger.error(`Telegram sendMessage error: ${data.description}`);
+        return null;
       }
+      return data.result?.message_id || null;
     } catch (err) {
       this.logger.error(`Telegram sendMessage exception: ${err.message}`);
+      return null;
+    }
+  }
+
+  private async editTelegramMessage(
+    chatId: string,
+    messageId: number,
+    text: string,
+    options?: {
+      parse_mode?: string;
+      reply_markup?: any;
+    },
+  ): Promise<boolean> {
+    if (!this.botToken) return false;
+
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/editMessageText`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            message_id: messageId,
+            text,
+            ...options,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!data.ok) {
+        this.logger.warn(`editMessageText error: ${data.description}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      this.logger.error(`editMessageText exception: ${err.message}`);
+      return false;
+    }
+  }
+
+  private async deleteTelegramMessage(
+    chatId: string,
+    messageId: number,
+  ): Promise<boolean> {
+    if (!this.botToken) return false;
+
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/deleteMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            message_id: messageId,
+          }),
+        },
+      );
+      const data = await res.json();
+      return data.ok === true;
+    } catch {
+      return false;
     }
   }
 

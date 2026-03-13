@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -62,5 +63,29 @@ export class QuizController {
   @ApiOperation({ summary: "Get quiz session history" })
   getSessions(@Query() dto: GetQuizSessionsDto) {
     return this.quizService.getSessionHistory(dto.page, dto.limit);
+  }
+
+  // ==================== SETTINGS ====================
+
+  @Get("settings")
+  @ApiOperation({ summary: "Get quiz settings" })
+  getSettings() {
+    return this.quizService.getSettings();
+  }
+
+  @Put("settings")
+  @ApiOperation({ summary: "Update quiz settings" })
+  updateSettings(
+    @Body() body: { answerTimeSeconds?: number; waitTimeSeconds?: number },
+  ) {
+    return this.quizService.updateSettings(body);
+  }
+
+  // ==================== LEADERBOARD ====================
+
+  @Get("leaderboard")
+  @ApiOperation({ summary: "Get all-time leaderboard (top 10)" })
+  getLeaderboard() {
+    return this.quizService.getLeaderboard(10);
   }
 }

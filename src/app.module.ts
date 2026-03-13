@@ -21,6 +21,7 @@ import {
   QuizQuestion,
   QuizSession,
   QuizAnswer,
+  QuizSettings,
 } from "./modules/quiz/entities";
 
 // Modules
@@ -132,6 +133,7 @@ import { QuizModule } from "./modules/quiz/quiz.module";
             QuizQuestion,
             QuizSession,
             QuizAnswer,
+            QuizSettings,
           ],
           synchronize: false, // Production'da o'chirilgan - migration ishlatish kerak
           logging: false, // Disabled to reduce terminal noise
