@@ -13,6 +13,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { JwtService } from "@nestjs/jwt";
 import { UploadService } from "../upload/upload.service";
+import { QuizService } from "../quiz/quiz.service";
 import { User } from "../users/entities";
 import * as crypto from "crypto";
 
@@ -59,6 +60,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private configService: ConfigService,
     @Inject(forwardRef(() => UploadService))
     private uploadService: UploadService,
+    private quizService: QuizService,
   ) {
     this.botToken = this.configService.get<string>("TELEGRAM_BOT_TOKEN") || "";
   }
@@ -743,6 +745,40 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Check if user is admin/creator of a specific chat (group/channel)
+   */
+  private async checkChatAdminStatus(
+    chatId: number | string,
+    userId: number,
+  ): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getChatMember`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            user_id: userId,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!data.ok) {
+        this.logger.warn(
+          `[CHAT_ADMIN_CHECK] API error: ${data.description}`,
+        );
+        return false;
+      }
+      const status = data.result?.status;
+      return ["administrator", "creator"].includes(status);
+    } catch (err) {
+      this.logger.error(`[CHAT_ADMIN_CHECK] Exception: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Send subscription required message
    */
   private async sendSubscriptionRequired(
@@ -851,7 +887,82 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
 
         this.logger.log(`[BOT] Welcome message sent to ${firstName}`);
-      } else if (update.message && !update.message.text?.startsWith("/")) {
+      }
+
+      // Handle /starttest command
+      if (update.message?.text && /^\/starttest(\d*)$/i.test(update.message.text.split("@")[0].trim())) {
+        const chatId = update.message.chat.id;
+        const from = update.message.from;
+        const cmdText = update.message.text.split("@")[0].trim();
+
+        // Check if user is chat admin/creator
+        const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
+        if (!isChatAdmin) {
+          await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
+            parse_mode: "HTML",
+          });
+          return { ok: true };
+        }
+
+        // Parse number of questions from command
+        const match = cmdText.match(/^\/starttest(\d*)$/i);
+        let numQuestions = 15; // default
+        if (match && match[1]) {
+          numQuestions = parseInt(match[1]);
+          if (numQuestions < 1 || numQuestions > 100) {
+            numQuestions = 15;
+          }
+        }
+
+        const result = await this.quizService.startQuiz(
+          chatId.toString(),
+          numQuestions,
+        );
+
+        if (result === "quiz_already_running") {
+          await this.sendMessage(chatId, "⏳ Quiz allaqachon ishlayapti. To'xtatish uchun /stoptest yuboring.", {
+            parse_mode: "HTML",
+          });
+        } else if (result === "no_questions") {
+          await this.sendMessage(
+            chatId,
+            "❌ Ma'lumotlar bazasida quiz savollari yo'q. Admin paneldan savollarni yuklang.",
+            { parse_mode: "HTML" },
+          );
+        }
+
+        return { ok: true };
+      }
+
+      // Handle /stoptest command
+      if (update.message?.text && /^\/stoptest$/i.test(update.message.text.split("@")[0].trim())) {
+        const chatId = update.message.chat.id;
+        const from = update.message.from;
+
+        // Check if user is chat admin/creator
+        const isChatAdmin = await this.checkChatAdminStatus(chatId, from.id);
+        if (!isChatAdmin) {
+          await this.sendMessage(chatId, "⛔ Bu buyruq faqat guruh/kanal adminlari uchun.", {
+            parse_mode: "HTML",
+          });
+          return { ok: true };
+        }
+
+        const stopped = await this.quizService.stopQuiz(chatId.toString());
+        if (stopped) {
+          await this.sendMessage(chatId, "🛑 Quiz admin tomonidan to'xtatildi.", {
+            parse_mode: "HTML",
+          });
+        } else {
+          await this.sendMessage(chatId, "Hozir hech qanday quiz ishlamayapti.", {
+            parse_mode: "HTML",
+          });
+        }
+
+        return { ok: true };
+      }
+
+      if (update.message && !update.message.text?.startsWith("/")) {
         // Oddiy xabar yuborilganda ham obunani tekshirish
         const chatId = update.message.chat.id;
         const from = update.message.from;
@@ -968,6 +1079,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             );
           }
           return { ok: true };
+        }
+
+        // Handle quiz answer callback: "qa:{questionIndex}:{option}"
+        if (data && data.startsWith("qa:")) {
+          const parts = data.split(":");
+          if (parts.length === 3) {
+            const questionIndex = parseInt(parts[1]);
+            const option = parts[2];
+            await this.quizService.handleQuizAnswer(
+              chatId.toString(),
+              questionIndex,
+              option,
+              from.id.toString(),
+              from.username || null,
+              callbackQueryId,
+            );
+            return { ok: true };
+          }
         }
 
         await answerCallback();

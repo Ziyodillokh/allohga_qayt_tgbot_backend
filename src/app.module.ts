@@ -17,6 +17,11 @@ import { AIChat } from "./modules/ai/entities";
 import { AdminMessage, Setting, DesignSetting } from "./modules/admin/entities";
 import { WeeklyXP, MonthlyXP } from "./modules/leaderboard/entities";
 import { Zikr, ZikrCompletion } from "./modules/zikr/entities";
+import {
+  QuizQuestion,
+  QuizSession,
+  QuizAnswer,
+} from "./modules/quiz/entities";
 
 // Modules
 import { AuthModule } from "./modules/auth/auth.module";
@@ -34,6 +39,7 @@ import { TelegramModule } from "./modules/telegram/telegram.module";
 import { StatsModule } from "./modules/stats/stats.module";
 import { ZikrModule } from "./modules/zikr/zikr.module";
 import { WebsocketModule } from "./modules/websocket/websocket.module";
+import { QuizModule } from "./modules/quiz/quiz.module";
 
 @Module({
   imports: [
@@ -123,6 +129,9 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
             DesignSetting,
             Zikr,
             ZikrCompletion,
+            QuizQuestion,
+            QuizSession,
+            QuizAnswer,
           ],
           synchronize: false, // Production'da o'chirilgan - migration ishlatish kerak
           logging: false, // Disabled to reduce terminal noise
@@ -150,6 +159,7 @@ import { WebsocketModule } from "./modules/websocket/websocket.module";
     StatsModule,
     ZikrModule,
     WebsocketModule,
+    QuizModule,
   ],
   controllers: [HealthController],
 })

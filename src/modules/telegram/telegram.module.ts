@@ -6,11 +6,13 @@ import { TelegramController } from "./telegram.controller";
 import { TelegramService } from "./telegram.service";
 import { User } from "../users/entities";
 import { UploadModule } from "../upload/upload.module";
+import { QuizModule } from "../quiz/quiz.module";
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
     forwardRef(() => UploadModule),
+    QuizModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
