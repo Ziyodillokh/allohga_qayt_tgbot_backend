@@ -34,6 +34,8 @@ export class QuizService {
   private botToken: string;
   // Keep messageIds after quiz ends for /clean
   private chatMessageIds: Map<string, number[]> = new Map();
+  // Track used question IDs per chat to avoid repeating until all exhausted
+  private usedQuestionIds: Map<string, Set<string>> = new Map();
 
   constructor(
     @InjectRepository(QuizQuestion)
@@ -312,8 +314,28 @@ export class QuizService {
     }
 
     const allQuestions = await this.quizQuestionRepo.find();
-    const shuffled = this.shuffleArray([...allQuestions]);
+
+    // Non-repeating logic: filter out previously used questions
+    if (!this.usedQuestionIds.has(chatId)) {
+      this.usedQuestionIds.set(chatId, new Set());
+    }
+    const usedIds = this.usedQuestionIds.get(chatId)!;
+
+    let available = allQuestions.filter((q) => !usedIds.has(q.id));
+
+    // If not enough unused questions, reset the pool
+    if (available.length < numQuestions) {
+      usedIds.clear();
+      available = [...allQuestions];
+    }
+
+    const shuffled = this.shuffleArray([...available]);
     const selected = shuffled.slice(0, numQuestions);
+
+    // Mark selected as used
+    for (const q of selected) {
+      usedIds.add(q.id);
+    }
 
     // Load settings
     const settings = await this.getSettings();
